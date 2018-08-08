@@ -159,6 +159,8 @@ class DynamicSubmodel(ApplicationSimulationObject):
             if rxn.rate_laws:
                 parameter_values = {param.id: param.value for param in rxn.rate_laws[0].equation.parameters}
                 self.rates[idx_reaction] = RateLawUtils.eval_rate_law(rxn.rate_laws[0], species_concentrations, parameter_values)
+                if rxn.id == 'dM':
+                    self.rates[idx_reaction] = self.rates[idx_reaction] * self.dynamic_model.cell_volume() * Avogadro
         # TODO(Arthur): optimization: get this if to work:
         # if self.logger.isEnabledFor(self.logger.getEffectiveLevel()):
         # print('self.logger.getEffectiveLevel())', self.logger.getEffectiveLevel())
