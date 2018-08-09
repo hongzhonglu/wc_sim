@@ -221,3 +221,23 @@ class TestDynamicModel(unittest.TestCase):
                 for d_index in range(index+1):
                     expected_val += d_index * sum([i*i for i in range(d_index+1)])
                 self.assertEqual(expected_val, obs_val)
+
+class TestExponentiallyGrowingM(unittest.TestCase):
+
+    MODEL_FILENAME = os.path.join(os.path.dirname(__file__), 'fixtures', 'test_model_for_exponential_growth_in_M.xlsx')
+
+    def setUp(self):
+        # read and initialize a model
+        self.model = Reader().run(MODEL_FILENAME, strict=False)
+        multialgorithm_simulation = MultialgorithmSimulation(self.model, None)
+        dynamic_compartments = multialgorithm_simulation.dynamic_compartments
+        self.dynamic_model = DynamicModel(self.model, multialgorithm_simulation.local_species_population, dynamic_compartments)
+
+    def test_verify_dM_special_case_handling(self):
+        ccds = self.dynamic_model.get_submodels()[0]
+        species_concentrations = ccds.get_specie_concentrations()
+        for idx_reaction, rxn in enumerate(ccds.reactions):
+            if rxn.id == 'dM':
+                parameter_values = {param.id: param.value for param in rxn.rate_laws[0].equation.parameters}
+                init_rate = RateLawUtils.eval_rate_law(rxn.rate_laws[0], species_concentrations, parameter_values)
+                self.assertEqual(init_rate, parameter_values['growthRate']*species_concentrations['M'])
