@@ -10,7 +10,7 @@
 import warnings
 
 from capturer import CaptureOutput
-from numpy import sqrt, exp, mean, diagonal, linspace
+from numpy import diagonal, exp, linspace, mean, sqrt
 from os import path
 from pandas import Float64Index
 from scipy.constants import Avogadro
@@ -44,6 +44,7 @@ def build_dynamic_submodels(model):
                 multialgorithm_simulation.get_dynamic_compartments(submodel), 
                 multialgorithm_simulation.local_species_population)
     return dynamic_submodels
+
 
 def get_dynamic_submodel_data(dynamic_submodel):
     params = dynamic_submodel.get_parameter_values()
