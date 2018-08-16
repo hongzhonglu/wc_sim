@@ -6,16 +6,13 @@
 :License: MIT
 """
 
-import os
 import unittest
 import shutil
 import tempfile
 import pandas
 import numpy
-from scipy.optimize import curve_fit
 from capturer import CaptureOutput
 
-from wc_lang.io import Reader
 from wc_lang.core import SpeciesType
 from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 from wc_sim.multialgorithm.simulation import Simulation
@@ -69,31 +66,3 @@ class TestRunResults(unittest.TestCase):
         run_results = RunResults(self.results_dir)
         with self.assertRaisesRegexp(MultialgorithmError, "component '.*' is not an element of "):
             run_results.get('not_a_component')
-
-class TestExponentialGrowth_M(unittest.TestCase):
-
-    MODEL_FILENAME = os.path.join(os.path.dirname(__file__), 'fixtures', 'test_model_for_exponential_growth_in_M.xlsx')
-
-    def setUp(self):
-        self.model = Reader().run(self.MODEL_FILENAME, strict=False)
-        self.temp_dir = tempfile.mkdtemp()
-        simulation = Simulation(self.model)
-        self.checkpoint_period = 60
-        self.end_time = 108000
-        with CaptureOutput(relay=False) as capturer:
-            _, self.results_dir = simulation.run(end_time=self.end_time, results_dir=self.temp_dir,
-                checkpoint_period=self.checkpoint_period)
-    
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir)
-
-    def test_exponential_growth_in_M(self):
-        time = pandas.Float64Index(numpy.linspace(0, self.end_time, 1 + self.end_time/self.checkpoint_period))
-        run_results = RunResults(self.results_dir)
-        populations = run_results.get('populations')
-        M_abundance = populations['M[c]']
-        cf_result = curve_fit(lambda t,a,b: a*numpy.exp(b*t), time, M_abundance, p0=(M_abundance[time[0]], 1e-6))
-        cf_M_0 = cf_result[0][0]  # target is 1e4
-        cf_exp = cf_result[0][1]  # target is 8.3713e-06 = ln(2)/23 * 1/3600
-        self.assertTrue(abs(cf_M_0 - 1e4) < 100)
-        self.assertTrue(abs(cf_exp -  8.3713e-06) < 5e-7)

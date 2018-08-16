@@ -16,7 +16,6 @@ from itertools import chain
 from wc_lang.io import Reader
 from wc_lang.core import (Model, Submodel, Compartment, Reaction, SpeciesType, Species, SpeciesCoefficient,
     Concentration, ConcentrationUnit, Observable, ExpressionMethods)
-from wc_lang.prepare import PrepareModel, CheckModel
 from wc_sim.multialgorithm.species_populations import LocalSpeciesPopulation
 from wc_sim.multialgorithm.dynamic_components import DynamicModel, DynamicCompartment
 from wc_sim.multialgorithm.multialgorithm_simulation import MultialgorithmSimulation
@@ -24,24 +23,7 @@ from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 from wc_sim.multialgorithm.dynamic_expressions import DynamicObservable
 from wc_sim.multialgorithm.species_populations import MakeTestLSP
 from wc_sim.multialgorithm.make_models import MakeModels
-from wc_sim.multialgorithm.submodels.dynamic_submodel import DynamicSubmodel
 
-
-def prepare_model(model):
-    PrepareModel(model).run()
-    CheckModel(model).run()
-
-def make_dynamic_submodel_params(model, submodel):
-    multialgorithm_simulation = MultialgorithmSimulation(model, {})
-    multialgorithm_simulation.build_simulation()
-
-    return (submodel.id,
-            multialgorithm_simulation.dynamic_model,
-            submodel.reactions,
-            submodel.get_species(),
-            model.get_parameters(),
-            multialgorithm_simulation.get_dynamic_compartments(submodel),
-            multialgorithm_simulation.local_species_population)
 
 class TestDynamicCompartment(unittest.TestCase):
 
@@ -239,27 +221,3 @@ class TestDynamicModel(unittest.TestCase):
                 for d_index in range(index+1):
                     expected_val += d_index * sum([i*i for i in range(d_index+1)])
                 self.assertEqual(expected_val, obs_val)
-
-class TestInitialRate_dM(unittest.TestCase):
-
-    MODEL_FILENAME = os.path.join(os.path.dirname(__file__), 'fixtures', 'test_model_for_exponential_growth_in_M.xlsx')
-
-    def setUp(self):
-        self.model = Reader().run(self.MODEL_FILENAME, strict=False)
-        prepare_model(self.model)
-        self.dynamic_submodels = {}
-        for submodel in self.model.get_submodels():
-            (id, dynamic_model, reactions, species, parameters, dynamic_compartments, local_species_pop) = \
-                make_dynamic_submodel_params(self.model, submodel)
-            self.dynamic_submodels[submodel.id] = DynamicSubmodel(
-                id, dynamic_model, reactions, species, parameters, dynamic_compartments, local_species_pop)
-    
-    def test_calc_reaction_rates_dM(self):
-        for dynamic_submodel in self.dynamic_submodels.values():
-            counts = dynamic_submodel.get_specie_counts()
-            rates = dynamic_submodel.calc_reaction_rates()
-            params = dynamic_submodel.get_parameter_values()
-            for rxn_index, rxn in enumerate(dynamic_submodel.reactions):
-                if rxn.id == 'dM':
-                    self.assertEquals(rates[rxn_index], params['growthRate']*counts['M[c]'])
-
