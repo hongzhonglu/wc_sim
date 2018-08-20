@@ -46,7 +46,8 @@ class DynamicCompartment(object):
                 in this compartment; defaults to the IDs of all species in `species_population`
 
         Raises:
-            :obj:`MultialgorithmError`: if `init_volume` is not a positive number
+            :obj:`MultialgorithmError`: if `init_volume` is not a positive number or initial mass is
+                `NaN`
         """
         self.id = compartment.id
         self.name = compartment.name
@@ -59,6 +60,9 @@ class DynamicCompartment(object):
         if self.init_volume<=0:
             raise MultialgorithmError("DynamicCompartment {}: init_volume ({}) must be a positive number.".format(
                 self.name, self.init_volume))
+        if math.isnan(self.mass()):
+            raise MultialgorithmError("DynamicCompartment '{}': initial mass is NaN, preventing calculation "
+                "of dynamic density or dynamic volume".format(self.name))
         if 0 == self.mass():
             warnings.warn("DynamicCompartment '{}': initial mass is 0, so constant_density is 0, and "
                 "volume will remain constant".format(self.name))

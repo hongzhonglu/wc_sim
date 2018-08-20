@@ -171,6 +171,7 @@ def build_mock_model():
     species_R = wc_lang.core.Species(species_type=species_type_R, compartment=compartment_c)
     species = [species_L, species_R]
 
+    # units are wrong, but code being discarded
     wc_lang.core.Concentration(species=species_L, value=1., units='molecules')
     wc_lang.core.Concentration(species=species_R, value=0., units='molecules')
 

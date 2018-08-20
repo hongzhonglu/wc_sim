@@ -22,18 +22,23 @@ from wc_lang import (Species, Reaction, Parameter, StopCondition, Function, Obse
     ObjectiveFunction, RateLaw, RateLawEquation)
 from wc_sim.multialgorithm.species_populations import LocalSpeciesPopulation
 from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
-from wc_lang.expression_utils import TokCodes
+from wc_lang.expression_utils import TokCodes, RateLawUtils
 
 '''
 # TODO:
 build:
     integrate into dynamic simulation
+    support parameters in rate_law.equation.expression by making it a DynamicExpression
+    don't create duplicate DynamicSpecies, or any other Dynamic* object; generalize creation this to get_or_create()
+    make all of DynamicSubmodel's methods handle DynamicReactions, & replace self.reactions w self.dynamic_reactions
+    think about and support reactants and modifiers in multiple compartments
+    in "return RateLawUtils.eval_rate_law(self, ..." raise exception if species_concentrations is None
 cleanup
-    move dynamic_components to a more convenient place
+    move dynamic_components to a more convenient place; cannot leave DynamicComponent defined in this file
     jupyter examples
     memoize performance comparison; decide whether to trash or finish implementing direct dependency tracking eval
     clean up memoize cache file?
-
+optimizations
 Expression eval design:
     Algorithms:
         evaling expression model types:
@@ -78,7 +83,9 @@ class DynamicComponent(object):
     Attributes:
         dynamic_model (:obj:`DynamicModel`): the simulation's dynamic model
         local_species_population (:obj:`LocalSpeciesPopulation`): the simulation's species population store
-        id (:obj:`str`): unique id
+        id (:obj:`str`): unique id; dynamic components use the same `id` as the corresponding
+            `wc_lang_model`, unless it does not have an id; exceptions:
+                * `DynamicRateLaw` uses the `id` of the `RateLaw`'s `reaction`
     """
     def __init__(self, dynamic_model, local_species_population, wc_lang_model):
         """
@@ -172,8 +179,9 @@ class DynamicExpression(DynamicComponent):
                 try:
                     dynamic_expression = self.get_dynamic_component(wc_token.model, wc_token.model_id)
                 except:
-                    raise MultialgorithmError("'{}.{} must be prepared to create '{}''".format(
-                        wc_token.model.__class__.__name__, wc_token.model_id, self.id))
+                    raise MultialgorithmError("{} '{}' must be created before {} '{}' can be prepared'".format(
+                        DynamicExpression.get_dynamic_model_type(wc_token.model.__class__).__name__, wc_token.model_id,
+                        self.__class__.__name__, self.id))
                 self.wc_sim_tokens.append(WcSimToken(SimTokCodes.dynamic_expression, wc_token.token_string,
                     dynamic_expression))
             else:   # pragma    no cover
@@ -402,41 +410,43 @@ class MassActionKinetics(DynamicComponent):
         id (:obj:`str`): reaction id
         order (:obj:`int`): order
         rate_constant (:obj:`float`): the rate law's rate constant
-        dynamic_reactant_species (:obj:`list` of `DynamicSpecies`): the reactants
+        reactants (:obj:`list` of `DynamicSpecies`): the reactants
         reactant_coefficients (:obj:`list` of `float`): the reactants' reactant_coefficients
+        dynamic_compartment (:obj:`DynamicCompartment`): the `DynamicCompartment` that contains
+            the reactants in `rate_law.reaction`
     """
 
-    def __init__(self, dynamic_model, local_species_population, rate_law):
+    def __init__(self, dynamic_model, local_species_population, dynamic_compartment, rate_law):
         """ Create an instance of MassActionKinetics
 
         Args:
             rate_law (:obj:`wc_lang.core.RateLaw`): a RateLaw instance
         """
-        # todo: get rid of the 'rate_law.reaction' hack
         super().__init__(dynamic_model, local_species_population, rate_law.reaction)
         self.id = rate_law.reaction.id
+        self.dynamic_compartment = dynamic_compartment
         self.order = MassActionKinetics.molecularity(rate_law.reaction)
         try:
             self.rate_constant = float(rate_law.equation.expression)
         except ValueError:
             raise ValueError('rate_law.equation.expression not a float')
-        self.dynamic_reactant_species = []
+        self.reactants = []
         self.reactant_coefficients = []
         for part in rate_law.reaction.participants:
             # only consider reactants
             if part.coefficient < 0:
-                # todo: optimization: if it exists, reuse a DynamicSpecies for part.species; generalize this to get_or_create()
-                self.dynamic_reactant_species.append(DynamicSpecies(dynamic_model, local_species_population,
+                self.reactants.append(DynamicSpecies(dynamic_model, local_species_population,
                     part.species))
                 self.reactant_coefficients.append(-part.coefficient)
 
-    def calc_mass_action_rate(self, time, volume=None):
+    def calc_mass_action_rate(self, time, compartment_volume=None):
         """ Calculate a mass action rate
 
         Args:
             time (:obj:`float`): the current simulation time
-            volume (:obj:`float`, optional): the current volume; an option that enables the cost of
-                computing volume to be amortized over many rate law calculations
+            compartment_volume (:obj:`float`, optional): the volume of the compartment storing the
+                reaction's reactants; optional volume
+                enables amortization of the cost of computing volume over multiple rate calculations
 
         Returns:
             :obj:`float`: the rate for the rate law passed to `MassActionKinetics()` at time `time`
@@ -446,29 +456,30 @@ class MassActionKinetics(DynamicComponent):
             combinations = 1
         elif self.order == 1:
             # uni reaction
-            combinations = self.dynamic_reactant_species[0].get_population(time)
+            combinations = self.reactants[0].get_population(time)
         elif self.order == 2:
-            specie_0_population = self.dynamic_reactant_species[0].get_population(time)
+            specie_0_population = self.reactants[0].get_population(time)
             if self.reactant_coefficients[0] == 1:
                 # since order == 2, both reactant_coefficients must be 1
                 # bi- distinct reaction
-                combinations = specie_0_population*self.dynamic_reactant_species[1].get_population(time)
+                combinations = specie_0_population*self.reactants[1].get_population(time)
             elif self.reactant_coefficients[0] == 2:
                 # bi- same reaction
                 combinations = specie_0_population*(specie_0_population-1)/2
             else:
-                # todo: better message in "calc_mass_action_rate: self.reactant_coefficients[0] not 1 or 2"
-                assert False, "calc_mass_action_rate: self.reactant_coefficients[0] not 1 or 2"
+                assert False, \
+                    "calc_mass_action_rate: reaction '{}': self.reactant_coefficients[0] ({}) not 1 or 2".format(
+                        self.id, self.reactant_coefficients[0])
         else:
-            # todo: better message in assert False, "calc_mass_action_rate: 2 < self.order"
-            assert False, "calc_mass_action_rate: 2 < self.order"
+            assert False, "calc_mass_action_rate: reaction '{}': 2 < self.order ({})".format(self.id,
+                self.order)
 
         if self.order == 1:
             rate = self.rate_constant * combinations
         else:
-            if volume is None:
-                volume = self.dynamic_model.cell_volume()
-            vol_avo = volume*Avogadro
+            if compartment_volume is None:
+                compartment_volume = self.dynamic_compartment.volume()
+            vol_avo = compartment_volume*Avogadro
             molarity_correction = pow(vol_avo, 1-self.order)
             rate = self.rate_constant * combinations * molarity_correction
         return rate
@@ -526,41 +537,91 @@ class MassActionKinetics(DynamicComponent):
         rv.append("id: {}".format(self.id))
         rv.append("order: {}".format(self.order))
         rv.append("rate_constant: {}".format(self.rate_constant))
-        rv.append("dynamic_reactant_species: {}".format([s.id for s in self.dynamic_reactant_species]))
+        rv.append("dynamic_compartment: {}".format(self.dynamic_compartment.id))
+        rv.append("reactants: {}".format([s.id for s in self.reactants]))
         rv.append("reactant_coefficients: {}".format(self.reactant_coefficients))
         return '\n'.join(rv)
 
 
 class DynamicRateLaw(DynamicComponent):
-    """ The dynamic representation of a `RateLaw`
+    """ The dynamic representation of a rate law
+
+    Attributes:
+        mass_action (:obj:`bool`): if set, use a mass action rate
+        k_cat (:obj:`float`): if in `rate_law`, the law's k_cat, otherwise not set
+        k_m (:obj:`float`): if in `rate_law`, the law's k_m, otherwise not set
+        transcoded_equation (:obj:`float`): if not a mass action rate law, the rate law's
+            equation transcoded for evaluation
     """
 
-    def __init__(self, dynamic_model, local_species_population, rate_law):
+    def __init__(self, dynamic_model, local_species_population, dynamic_compartment, rate_law):
         """
         Args:
             dynamic_model (:obj:`DynamicModel`): the simulation's dynamic model
             local_species_population (:obj:`LocalSpeciesPopulation`): the simulation's species population store
+            dynamic_compartment (:obj:`DynamicCompartment`): the `DynamicCompartment` that contains
+                the reactants in and modifiers for the reaction
             rate_law (:obj:`wc_lang.core.RateLaw`): the corresponding `wc_lang` `RateLaw`
         """
         super().__init__(dynamic_model, local_species_population, rate_law)
+        self.dynamic_compartment = dynamic_compartment
+        if MassActionKinetics.is_mass_action_rate_law(rate_law):
+            self.mass_action = True
+            self.mass_action_rate_law = MassActionKinetics(dynamic_model, local_species_population,
+                dynamic_compartment, rate_law)
+        else:
+            self.mass_action = False
+            if hasattr(rate_law, 'k_cat') and not math.isnan(rate_law.k_cat):
+                self.k_cat = rate_law.k_cat
+            if hasattr(rate_law, 'k_m') and not math.isnan(rate_law.k_m):
+                self.k_m = rate_law.k_m
+            self.transcoded_equation = RateLawUtils.transcode(rate_law.equation,
+                dynamic_model.dynamic_species.keys(), dynamic_model.dynamic_parameters.keys())
 
-    def eval(self, time):
-        """ Provide this law's rate
+    def eval(self, time, parameter_values=None, species_concentrations=None, compartment_volume=None):
+        """ Provide this rate law's rate
 
         Args:
             time (:obj:`float`): the current simulation time
+            parameter_values (:obj:`dict`, optional): a map: parameter_id -> parameter value
+            compartment_volume (:obj:`float`, optional): the volume of the compartment storing the
+                reaction's reactants; optional volume; must be provided if `self.mass_action` is False
+                enables amortization of the cost of computing volume over multiple rate calculations
+            species_concentrations (:obj:`dict`, optional): species_id -> species concentration; must
+                be provided if `self.mass_action` is False
+
+        Returns:
+            :obj:`float`: the rate for the rate law at time `time`
         """
-        if MassActionKinetics.is_mass_action_rate_law(rate_law_equation):
-            return MassActionKinetics(rate_law_equation)
+        if self.mass_action:
+            return self.mass_action_rate_law.calc_mass_action_rate(time, compartment_volume)
+        else:
+            return RateLawUtils.eval_rate_law(self, species_concentrations, parameter_values,
+                transcoded_equation=self.transcoded_equation)
+
+    def __str__(self):
+        """ Provide a readable representation of this `DynamicRateLaw`
+
+        Returns:
+            :obj:`str`: a readable representation of this `DynamicRateLaw`
+        """
+        rv = ['DynamicRateLaw:']
+        rv.append("id: {}".format(self.id))
+        rv.append("dynamic_compartment: {}".format(self.dynamic_compartment.id))
+        rv.append("mass_action: {}".format(self.mass_action))
+        for attr in ['k_m', 'k_cat', 'transcoded_equation']:
+            if hasattr(self, attr):
+                rv.append("{}: {}".format(attr, getattr(self, attr)))
+        return '\n'.join(rv)
 
 
 class DynamicReaction(DynamicComponent):
     """ A dynamic reaction
 
-    A `DynamicReaction` is the simulator's analog to wc_lang's `Reaction` class.
+    A `DynamicReaction` represents a single reaction in the simulator.
 
     Attributes:
-        dynamic_rate_law (:obj:`DynamicRateLaw`): this reaction's rate law
+        dynamic_rate_law (:obj:`DynamicRateLaw`): the reaction's rate law
     """
     def __init__(self, dynamic_model, local_species_population, reaction):
         """
@@ -568,11 +629,65 @@ class DynamicReaction(DynamicComponent):
             dynamic_model (:obj:`DynamicModel`): the simulation's dynamic model
             local_species_population (:obj:`LocalSpeciesPopulation`): the simulation's species population store
             reaction (:obj:`wc_lang.core.Reaction`): the corresponding `wc_lang` `Reaction`
+
+        Raises:
+            :obj:`MultialgorithmError`: if the modifiers in `reaction`'s rate law are contained in
+                multiple compartments
         """
         super().__init__(dynamic_model, local_species_population, reaction)
-        # make a reaction whose rate can be calculated by DynamicSubmodel.calc_reaction_rates()
+
         # prepare this reaction's rate law
-        self.dynamic_rate_law = DynamicRateLaw(dynamic_model, local_species_population, reaction.rate_laws[0])
+        compartment = self.verify_reactants_and_modifiers_compartment(reaction)
+        dynamic_compartment = dynamic_model.dynamic_compartments[compartment.id]
+        self.dynamic_rate_law = DynamicRateLaw(dynamic_model, local_species_population, dynamic_compartment,
+            reaction.rate_laws[0])
+
+    @staticmethod
+    def verify_reactants_and_modifiers_compartment(reaction):
+        """ Verify the compartment used by a reaction's reactants and rate law modifiers
+
+        Args:
+            reaction (:obj:`wc_lang.core.Reaction`): a `wc_lang` `Reaction`
+
+        Returns:
+            :obj:`wc_lang.core.Compartment`: returns the compartment containing `reaction`'s
+                reactants and rate law modifiers
+
+        Raises:
+            :obj:`MultialgorithmError`: if `reaction`'s reactants and rate law modifiers are contained
+                in multiple compartments, or if they are contained in a compartment other than
+                the reaction's submodel's compartment
+        """
+        compartments = set()
+        if hasattr(reaction.rate_laws[0].equation, 'modifiers'):
+            for modifier in reaction.rate_laws[0].equation.modifiers:
+                compartments.add(modifier.compartment)
+        for participant in reaction.participants:
+            compartments.add(participant.species.compartment)
+        if 1<len(compartments):
+            raise MultialgorithmError("reactants and modifiers of reaction '{}' reside in multiple compartments: {}".format(
+                reaction.id, ', '.join([comp.id for comp in compartments])))
+        elif 1 == len(compartments):
+            compartment = compartments.pop()
+            # check that the compartment is the compartment for reaction.submodel
+            if compartment != reaction.submodel.compartment:
+                raise MultialgorithmError("reactants and/or modifiers of reaction '{}' are stored in "
+                    "'{}', which is not its submodel's compartment: '{}'".format(
+                    reaction.id, compartment.id, reaction.submodel.compartment.id))
+            return reaction.submodel.compartment
+        else:
+            return reaction.submodel.compartment
+
+    def __str__(self):
+        """ Provide a readable representation of this `DynamicReaction`
+
+        Returns:
+            :obj:`str`: a readable representation of this `DynamicReaction`
+        """
+        rv = ['DynamicRateLaw:']
+        rv.append("id: {}".format(self.id))
+        rv.append("dynamic_rate_law.id: {}".format(self.dynamic_rate_law.id))
+        return '\n'.join(rv)
 
 
 WC_LANG_MODEL_TO_DYNAMIC_MODEL = {
