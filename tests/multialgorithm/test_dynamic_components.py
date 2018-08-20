@@ -62,7 +62,7 @@ class TestDynamicCompartment(unittest.TestCase):
         self.assertAlmostEqual(self.dynamic_compartment.mass(), estimated_mass)
 
         # set population of species to 0
-        init_populations = dict(zip(self.species_ids, [0]*len(self.species_ids)))
+        self.init_populations = init_populations = dict(zip(self.species_ids, [0]*len(self.species_ids)))
         local_species_pop = LocalSpeciesPopulation('test2', init_populations, self.molecular_weights)
         with warnings.catch_warnings(record=True) as w:
             dynamic_compartment = DynamicCompartment(self.compartment, local_species_pop, self.species_ids)
@@ -81,8 +81,17 @@ class TestDynamicCompartment(unittest.TestCase):
             DynamicCompartment(compartment, self.local_species_pop, self.species_ids)
 
         compartment = Compartment(id='id', name='name', initial_volume=float('nan'))
-        with self.assertRaises(MultialgorithmError):
+        with self.assertRaisesRegexp(MultialgorithmError,
+            "DynamicCompartment .*: init_volume is NaN, but must be a positive number"):
             DynamicCompartment(compartment, self.local_species_pop, self.species_ids)
+
+        compartment = Compartment(id='comp_id', name='undefined mass', initial_volume=1)
+        molecular_weights = dict(zip(self.species_ids, [float('nan')]*len(self.species_ids)))
+        local_species_pop = LocalSpeciesPopulation('test3', self.init_populations, molecular_weights)
+        with self.assertRaisesRegexp(MultialgorithmError,
+            "DynamicCompartment '.*': initial mass is NaN, preventing calculation "
+                "of dynamic density or dynamic volume"):
+            DynamicCompartment(compartment, local_species_pop, self.species_ids)
 
 
 class TestDynamicModel(unittest.TestCase):
