@@ -548,6 +548,7 @@ class DynamicRateLaw(DynamicComponent):
 
     Attributes:
         mass_action (:obj:`bool`): if set, use a mass action rate
+        michaelis_menten (:obj:`bool`): if set, this is a Michaelis–Menten rate law
         k_cat (:obj:`float`): if in `rate_law`, the law's k_cat, otherwise not set
         k_m (:obj:`float`): if in `rate_law`, the law's k_m, otherwise not set
         transcoded_equation (:obj:`float`): if not a mass action rate law, the rate law's
@@ -562,19 +563,28 @@ class DynamicRateLaw(DynamicComponent):
             dynamic_compartment (:obj:`DynamicCompartment`): the `DynamicCompartment` that contains
                 the reactants in and modifiers for the reaction
             rate_law (:obj:`wc_lang.core.RateLaw`): the corresponding `wc_lang` `RateLaw`
+
+        Raises:
+            :obj:`MultialgorithmError`: if this `rate_law`'s reaction's reactants and rate law modifiers
+                are not consistent with its kinetics
         """
         super().__init__(dynamic_model, local_species_population, rate_law)
         self.dynamic_compartment = dynamic_compartment
+        self.michaelis_menten = False
         if MassActionKinetics.is_mass_action_rate_law(rate_law):
+            self.verify_reactants_and_modifiers_compartment(rate_law.reaction)
             self.mass_action = True
             self.mass_action_rate_law = MassActionKinetics(dynamic_model, local_species_population,
                 dynamic_compartment, rate_law)
         else:
             self.mass_action = False
-            if hasattr(rate_law, 'k_cat') and not math.isnan(rate_law.k_cat):
+            if hasattr(rate_law, 'k_cat') and not math.isnan(rate_law.k_cat) and \
+                hasattr(rate_law, 'k_m') and not math.isnan(rate_law.k_m):
                 self.k_cat = rate_law.k_cat
-            if hasattr(rate_law, 'k_m') and not math.isnan(rate_law.k_m):
                 self.k_m = rate_law.k_m
+                self.michaelis_menten = True
+                self.verify_reactants_and_modifiers_compartment(rate_law.reaction)
+            # transcode all rate laws that are not mass action
             self.transcoded_equation = RateLawUtils.transcode(rate_law.equation,
                 dynamic_model.dynamic_species.keys(), dynamic_model.dynamic_parameters.keys())
 
@@ -598,6 +608,46 @@ class DynamicRateLaw(DynamicComponent):
         else:
             return RateLawUtils.eval_rate_law(self, species_concentrations, parameter_values,
                 transcoded_equation=self.transcoded_equation)
+
+    @staticmethod
+    def verify_reactants_and_modifiers_compartment(reaction):
+        """ Verify the compartment used by a reaction's reactants and rate law modifiers
+
+        This method is in `DynamicRateLaw` because its logic depends on the reaction's kinetics.
+        Reactions employing mass action or Michaelis-Menten kinetics must have all reactants and
+        modifiers in a single compartment. Reactions employing other kinetics are not constrained.
+
+        Args:
+            reaction (:obj:`wc_lang.core.Reaction`): a `wc_lang` `Reaction`
+
+        Returns:
+            :obj:`wc_lang.core.Compartment`: returns the compartment containing `reaction`'s
+                reactants and rate law modifiers
+
+        Raises:
+            :obj:`MultialgorithmError`: if `reaction`'s reactants and rate law modifiers are contained
+                in multiple compartments, or if they are contained in a compartment that is not
+                the reaction's submodel's compartment
+        """
+        compartments = set()
+        if hasattr(reaction.rate_laws[0].equation, 'modifiers'):
+            for modifier in reaction.rate_laws[0].equation.modifiers:
+                compartments.add(modifier.compartment)
+        for participant in reaction.participants:
+            compartments.add(participant.species.compartment)
+        if 1<len(compartments):
+            raise MultialgorithmError("reactants and modifiers of reaction '{}' reside in multiple "
+                "compartments: {}".format(reaction.id, ', '.join([comp.id for comp in compartments])))
+        elif 1 == len(compartments):
+            compartment = compartments.pop()
+            # check that the compartment is the compartment for reaction.submodel
+            if compartment != reaction.submodel.compartment:
+                raise MultialgorithmError("reactants and/or modifiers of reaction '{}' are stored in "
+                    "'{}', which is not its submodel's compartment: '{}'".format(
+                    reaction.id, compartment.id, reaction.submodel.compartment.id))
+            return reaction.submodel.compartment
+        else:
+            return reaction.submodel.compartment
 
     def __str__(self):
         """ Provide a readable representation of this `DynamicRateLaw`
@@ -637,46 +687,10 @@ class DynamicReaction(DynamicComponent):
         super().__init__(dynamic_model, local_species_population, reaction)
 
         # prepare this reaction's rate law
-        compartment = self.verify_reactants_and_modifiers_compartment(reaction)
+        compartment = reaction.submodel.compartment
         dynamic_compartment = dynamic_model.dynamic_compartments[compartment.id]
         self.dynamic_rate_law = DynamicRateLaw(dynamic_model, local_species_population, dynamic_compartment,
             reaction.rate_laws[0])
-
-    @staticmethod
-    def verify_reactants_and_modifiers_compartment(reaction):
-        """ Verify the compartment used by a reaction's reactants and rate law modifiers
-
-        Args:
-            reaction (:obj:`wc_lang.core.Reaction`): a `wc_lang` `Reaction`
-
-        Returns:
-            :obj:`wc_lang.core.Compartment`: returns the compartment containing `reaction`'s
-                reactants and rate law modifiers
-
-        Raises:
-            :obj:`MultialgorithmError`: if `reaction`'s reactants and rate law modifiers are contained
-                in multiple compartments, or if they are contained in a compartment other than
-                the reaction's submodel's compartment
-        """
-        compartments = set()
-        if hasattr(reaction.rate_laws[0].equation, 'modifiers'):
-            for modifier in reaction.rate_laws[0].equation.modifiers:
-                compartments.add(modifier.compartment)
-        for participant in reaction.participants:
-            compartments.add(participant.species.compartment)
-        if 1<len(compartments):
-            raise MultialgorithmError("reactants and modifiers of reaction '{}' reside in multiple compartments: {}".format(
-                reaction.id, ', '.join([comp.id for comp in compartments])))
-        elif 1 == len(compartments):
-            compartment = compartments.pop()
-            # check that the compartment is the compartment for reaction.submodel
-            if compartment != reaction.submodel.compartment:
-                raise MultialgorithmError("reactants and/or modifiers of reaction '{}' are stored in "
-                    "'{}', which is not its submodel's compartment: '{}'".format(
-                    reaction.id, compartment.id, reaction.submodel.compartment.id))
-            return reaction.submodel.compartment
-        else:
-            return reaction.submodel.compartment
 
     def __str__(self):
         """ Provide a readable representation of this `DynamicReaction`

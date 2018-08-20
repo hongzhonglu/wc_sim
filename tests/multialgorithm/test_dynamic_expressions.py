@@ -447,6 +447,32 @@ class TestDynamicRateLaw(unittest.TestCase):
     def setUp(self):
         create_test_model(self)
 
+    def test_reactants_and_modifiers_compartment(self):
+        for rxn in [self.rxn_1, self.rxn_2, self.rxn_3, self.rxn_4, self.rxn_5, self.rxn_6]:
+            self.assertEqual(rxn.submodel.compartment,
+                DynamicRateLaw.verify_reactants_and_modifiers_compartment(rxn))
+
+    def test_reactants_and_modifiers_compartment_exceptions(self):
+        rxn = self.submdl_0.reactions.create(id='species_in_diff_compartments')
+        rxn.participants.create(species=self.species[0], coefficient=-1)
+        rxn.participants.create(species=self.species_in_extra_comp, coefficient=-1)
+        equation = RateLawEquation(expression='6')
+        rxn.rate_laws.create(equation=equation)
+        with self.assertRaisesRegexp(MultialgorithmError,
+            "reactants and modifiers of reaction .* reside in multiple compartments:"):
+            DynamicRateLaw.verify_reactants_and_modifiers_compartment(rxn)
+        with self.assertRaisesRegexp(MultialgorithmError,
+            self.species_in_extra_comp.compartment.id):
+            DynamicRateLaw.verify_reactants_and_modifiers_compartment(rxn)
+
+        rxn = self.submdl_0.reactions.create(id='species_not_in_submodel_comp')
+        rxn.participants.create(species=self.species_in_extra_comp, coefficient=-1)
+        equation = RateLawEquation(expression='6')
+        rxn.rate_laws.create(equation=equation)
+        with self.assertRaisesRegexp(MultialgorithmError,
+            "reactants and/or modifiers of reaction.*are stored in.*which is not its submodel's compartment:"):
+            DynamicRateLaw.verify_reactants_and_modifiers_compartment(rxn)
+
     def test_dynamic_rate_law(self):
 
         dynamic_rate_laws = []
@@ -483,6 +509,7 @@ class TestDynamicRateLaw(unittest.TestCase):
         self.assertEqual(dynamic_rate_law.mass_action, False)
         self.assertEqual(dynamic_rate_law.k_cat, self.rate_law_10.k_cat)
         self.assertEqual(dynamic_rate_law.k_m, self.rate_law_10.k_m)
+        self.assertTrue(dynamic_rate_law.michaelis_menten)
         enzyme_id = self.rate_law_10.equation.modifiers[0].get_id()
         self.assertIn("concentrations['{}']".format(enzyme_id), dynamic_rate_law.transcoded_equation)
         mm_rate = self.rate_law_10.k_cat*concentrations[enzyme_id] / (self.rate_law_10.k_m+concentrations[enzyme_id])
@@ -517,32 +544,6 @@ class TestDynamicReaction(unittest.TestCase):
 
     def setUp(self):
         create_test_model(self)
-
-    def test_reactants_and_modifiers_compartment(self):
-        for rxn in [self.rxn_1, self.rxn_2, self.rxn_3, self.rxn_4, self.rxn_5, self.rxn_6]:
-            self.assertEqual(rxn.submodel.compartment,
-                DynamicReaction.verify_reactants_and_modifiers_compartment(rxn))
-
-    def test_reactants_and_modifiers_compartment_exceptions(self):
-        rxn = self.submdl_0.reactions.create(id='species_in_diff_compartments')
-        rxn.participants.create(species=self.species[0], coefficient=-1)
-        rxn.participants.create(species=self.species_in_extra_comp, coefficient=-1)
-        equation = RateLawEquation(expression='6')
-        rxn.rate_laws.create(equation=equation)
-        with self.assertRaisesRegexp(MultialgorithmError,
-            "reactants and modifiers of reaction .* reside in multiple compartments:"):
-            DynamicReaction.verify_reactants_and_modifiers_compartment(rxn)
-        with self.assertRaisesRegexp(MultialgorithmError,
-            self.species_in_extra_comp.compartment.id):
-            DynamicReaction.verify_reactants_and_modifiers_compartment(rxn)
-
-        rxn = self.submdl_0.reactions.create(id='species_not_in_submodel_comp')
-        rxn.participants.create(species=self.species_in_extra_comp, coefficient=-1)
-        equation = RateLawEquation(expression='6')
-        rxn.rate_laws.create(equation=equation)
-        with self.assertRaisesRegexp(MultialgorithmError,
-            "reactants and/or modifiers of reaction.*are stored in.*which is not its submodel's compartment:"):
-            DynamicReaction.verify_reactants_and_modifiers_compartment(rxn)
 
     def test_dynamic_reaction(self):
         dynamic_reaction = DynamicReaction(self.dynamic_model, self.species_pop, self.rxn_1)
