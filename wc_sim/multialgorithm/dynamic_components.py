@@ -8,8 +8,10 @@
 
 from scipy.constants import Avogadro
 import numpy as np
-import warnings
 import math
+import numbers
+from enum import Enum
+import warnings
 
 from obj_model import utils
 from wc_lang.core import Species, SpeciesType, Compartment
@@ -17,6 +19,14 @@ from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 from wc_sim.multialgorithm.species_populations import LocalSpeciesPopulation
 from wc_sim.multialgorithm.dynamic_expressions import (DynamicSpecies, DynamicFunction, DynamicStopCondition,
     DynamicParameter, DynamicObservable)
+
+
+class DynamicCompartmentType(Enum):
+    """ Types of dynamic compartments """
+    # Represent physical biochemistry: species have mass, density is constant, volume=mass/density is always computable
+    biochemical = 1
+    # Represent abstract species: constant volume and, perhaps, an unknown density
+    abstract = 2
 
 
 class DynamicCompartment(object):
@@ -29,13 +39,18 @@ class DynamicCompartment(object):
     Attributes:
         id (:obj:`str`): id of this `DynamicCompartment`, copied from `compartment`
         name (:obj:`str`): name of this `DynamicCompartment`, copied from `compartment`
-        init_volume (:obj:`float`): initial volume specified in the `wc_lang` model
         species_population (:obj:`LocalSpeciesPopulation`): an object that represents
             the populations of species in this `DynamicCompartment`
         species_ids (:obj:`list` of `str`): the IDs of the species stored
             in this dynamic compartment; if `None`, use the IDs of all species in `species_population`
+        compartment_type (:obj:`DynamicCompartmentType`): the type of dynamic compartment
+        init_volume (:obj:`float`): initial volume specified in the `wc_lang` model; if `compartment_type` is
+            `DynamicCompartmentType.abstract`, the volume of this compartment remains constant
+        constant_density (:obj:`float`): if `compartment_type` is `DynamicCompartmentType.biochemical`,
+            the density of this compartment, which remains constant
     """
-    def __init__(self, compartment, species_population, species_ids=None):
+    def __init__(self, compartment, species_population, species_ids=None,
+        compartment_type=DynamicCompartmentType.biochemical, density=None):
         """ Initialize this `DynamicCompartment`
 
         Args:
@@ -44,57 +59,110 @@ class DynamicCompartment(object):
                 the populations of species in this `DynamicCompartment`
             species_ids (:obj:`list` of `str`, optional): the IDs of the species stored
                 in this compartment; defaults to the IDs of all species in `species_population`
+            compartment_type (:obj:`DynamicCompartmentType`): the type of dynamic compartment; defaults
+                to `DynamicCompartmentType.biochemical`; a `DynamicCompartmentType.biochemical`
+                compartment must be initialized with 0<density, provided either directly or via
+                `compartment.initial_volume` and mass
+            density (:obj:`float`, optional): if provided, the density of this compartment, which
+                is assumed constant; not necessary if the volume and mass of the compartment are
+                both positive, or if `compartment_type` is `DynamicCompartmentType.abstract`
 
         Raises:
-            :obj:`MultialgorithmError`: if `init_volume` is not a positive number or initial mass is
-                `NaN`
+            :obj:`MultialgorithmError`:
+                if `compartment_type` is `DynamicCompartmentType.biochemical`, an exception is raised
+                    if a positive density cannot be computed from initial volume and mass, and `density`
+                    is not provided, or the molecular weight of any species type in `species_population`
+                    is not a positive real;
+                if `compartment_type` is `DynamicCompartmentType.abstract`, an exception is raised
+                    if `compartment`'s initial volume is not a positive real
         """
         self.id = compartment.id
         self.name = compartment.name
         self.init_volume = compartment.initial_volume
         self.species_population = species_population
         self.species_ids = species_ids
-        if math.isnan(self.init_volume):
-            raise MultialgorithmError("DynamicCompartment {}: init_volume is NaN, but must be a positive "
-                "number.".format(self.name))
-        if self.init_volume<=0:
-            raise MultialgorithmError("DynamicCompartment {}: init_volume ({}) must be a positive number.".format(
-                self.name, self.init_volume))
-        if math.isnan(self.mass()):
-            raise MultialgorithmError("DynamicCompartment '{}': initial mass is NaN, preventing calculation "
-                "of dynamic density or dynamic volume".format(self.name))
-        if 0 == self.mass():
-            warnings.warn("DynamicCompartment '{}': initial mass is 0, so constant_density is 0, and "
-                "volume will remain constant".format(self.name))
-        self.constant_density = self.mass()/self.init_volume
+        self.compartment_type = compartment_type
+
+        if compartment_type == DynamicCompartmentType.biochemical:
+            # all species types must have positive molecular weights
+            if species_population.invalid_weights():
+                raise MultialgorithmError("DynamicCompartment '{}': in a {} dynamic compartment all species "
+                    "types must have positive molecular weights, but these species do not: '{}'".format(
+                    self.name, compartment_type.name, species_population.invalid_weights()))
+
+            # compartment must be initialized with 0<density, provided either directly or via volume and mass
+            if density is None:
+                if not isinstance(self.init_volume, numbers.Real) or self.init_volume<=0 or math.isnan(self.init_volume):
+                    raise MultialgorithmError("DynamicCompartment '{}': in a {} dynamic compartment init_volume "
+                        "must be a positive real number but it is '{}'".format(
+                        self.name, compartment_type.name, self.init_volume))
+                if not isinstance(self.mass(), numbers.Real) or self.mass()<=0 or math.isnan(self.mass()):
+                    raise MultialgorithmError("DynamicCompartment '{}': in a {} dynamic compartment initial mass "
+                        "must be a positive real number but it is '{}'".format(
+                        self.name, compartment_type.name, self.mass()))
+                self.constant_density = self.mass()/self.init_volume
+            else:
+                if not isinstance(density, numbers.Real) or density<=0 or math.isnan(density):
+                    raise MultialgorithmError("DynamicCompartment '{}': in a {} dynamic compartment density, if "
+                        "provided, must be a positive real number but it is '{}'".format(
+                        self.name, compartment_type.name, density))
+                if 0<self.mass():
+                    warnings.warn("DynamicCompartment '{}': in a {} dynamic compartment providing density "
+                        "when 0<self.mass() may cause unexpected behavior because density may not = mass/volume".format(
+                        self.name, compartment_type.name))
+                self.constant_density = density
+        elif compartment_type == DynamicCompartmentType.abstract:
+                if not isinstance(self.init_volume, numbers.Real) or self.init_volume<=0 or math.isnan(self.init_volume):
+                    raise MultialgorithmError("DynamicCompartment '{}': in an {} dynamic compartment init_volume "
+                        "must be a positive real number but it is '{}'".format(
+                        self.name, compartment_type.name, self.init_volume))
+        else:
+            assert False, "DynamicCompartment '{}': invalid compartment_type: '{}'".format(self.name, compartment_type)
 
     def mass(self):
         """ Provide the total current mass of all species in this `DynamicCompartment`
 
+        If `compartment_type` is `DynamicCompartmentType.biochemical`, the mass is the sum of the
+        masses of all species. If `compartment_type` is `DynamicCompartmentType.abstract`, the mass
+        may not be known, and `None` is returned.
+
         Returns:
             :obj:`float`: this compartment's total current mass (g)
         """
-        return self.species_population.compartmental_mass(self.id)
+        if self.compartment_type == DynamicCompartmentType.biochemical:
+            return self.species_population.compartmental_mass(self.id)
+        else:
+            return None
 
     def volume(self):
         """ Provide the current volume of this `DynamicCompartment`
 
-        This compartment's density is assumed to be constant
+        If `compartment_type` is `DynamicCompartmentType.biochemical`, the volume is mass/density.
+        If `compartment_type` is `DynamicCompartmentType.abstract`, the volume is constant, and
+        given by `self.init_volume`.
 
         Returns:
             :obj:`float`: this compartment's current volume (L)
         """
-        if self.constant_density == 0:
+        if self.compartment_type == DynamicCompartmentType.biochemical:
+            return self.mass()/self.constant_density
+        else:
             return self.init_volume
-        return self.mass()/self.constant_density
 
     def density(self):
         """ Provide the density of this `DynamicCompartment`, which is assumed to be constant
 
+        If `compartment_type` is `DynamicCompartmentType.biochemical`, the density is `constant_density`.
+        If `compartment_type` is `DynamicCompartmentType.abstract`, the density is not known, and
+        `None` is returned.
+
         Returns:
             :obj:`float`: this compartment's density (g/L)
         """
-        return self.constant_density
+        if self.compartment_type == DynamicCompartmentType.biochemical:
+            return self.constant_density
+        else:
+            return None
 
     def __str__(self):
         """ Provide a string representation of this `DynamicCompartment`
@@ -106,10 +174,12 @@ class DynamicCompartment(object):
         values.append("ID: " + self.id)
         values.append("Name: " + self.name)
         values.append("Initial volume (L): {}".format(self.init_volume))
-        values.append("Constant density (g/L): {}".format(self.constant_density))
-        values.append("Current mass (g): {}".format(self.mass()))
-        values.append("Current volume (L): {}".format(self.volume()))
-        values.append("Fold change volume: {}".format(self.volume()/self.init_volume))
+        values.append("Compartment type: {}".format(self.compartment_type.name))
+        if self.compartment_type == DynamicCompartmentType.biochemical:
+            values.append("Constant density (g/L): {}".format(self.constant_density))
+            values.append("Current mass (g): {}".format(self.mass()))
+            values.append("Current volume (L): {}".format(self.volume()))
+            values.append("Fold change volume: {}".format(self.volume()/self.init_volume))
         return "DynamicCompartment:\n{}".format('\n'.join(values))
 
 # TODO(Arthur): define these in config data, which may come from wc_lang
