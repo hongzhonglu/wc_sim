@@ -411,6 +411,19 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         self.assertIn("molecular weight not available for '{}'".format(unknown_species),
             str(context.exception))
 
+    def test_invalid_weights(self):
+        bad_molecular_weights = ['x', float('nan'), -2, 0]
+        good_molecular_weights = [3, 1E5, 1E-5, 2.34]
+        num_mws = len(bad_molecular_weights)+len(good_molecular_weights)
+        species_ids = [str(i) for i in range(num_mws)]
+        molecular_weights = dict(zip(species_ids, bad_molecular_weights+good_molecular_weights))
+        init_populations = dict(zip(species_ids, [1]*num_mws))
+        local_species_pop = LocalSpeciesPopulation('test_invalid_weights', init_populations, molecular_weights)
+        ids_w_bad_mws = species_ids[:len(bad_molecular_weights)]
+        self.assertEqual(local_species_pop.invalid_weights(), set(ids_w_bad_mws))
+        ids_w_bad_or_no_mw = ['x'] + ids_w_bad_mws
+        self.assertEqual(local_species_pop.invalid_weights(species_ids=ids_w_bad_or_no_mw), set(ids_w_bad_or_no_mw))
+
     def test_make_test_lsp(self):
         make_test_lsp = MakeTestLSP()
         self.assertEqual(make_test_lsp.num_species, MakeTestLSP.DEFAULT_NUM_SPECIES)
@@ -759,7 +772,6 @@ class TestSpeciesPopSimObjectWithAnotherSimObject(unittest.TestCase):
                                 (get_pop_time-update_time)*updated_flux)
 
 
-
 class InitMsg1(SimulationMessage): pass
 
 class TestSpeciesPopSimObject(unittest.TestCase):
@@ -789,4 +801,3 @@ class TestSpeciesPopSimObject(unittest.TestCase):
                 message_types.GivePopulation(7))
         self.assertIn("'wc_sim.multialgorithm.species_populations.SpeciesPopSimObject' simulation "
             "objects not registered to receive", str(context.exception))
-

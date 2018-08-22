@@ -14,6 +14,7 @@ import numpy
 import sys
 from collections import defaultdict
 from scipy.constants import Avogadro
+import math
 
 import wc_lang
 from wc_sim.core.simulation_object import (SimulationObject, ApplicationSimulationObject,
@@ -753,7 +754,6 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             raise SpeciesPopulationError("adjust_continuously error(s) at time {}:\n{}".format(
                 time, '\n'.join(errors)))
 
-    # TODO(Arthur): probably don't need compartment_id, because compartment is part of the species_ids
     def compartmental_mass(self, compartment_id, species_ids=None):
         """ Compute the current mass of some, or all, species in a compartment
 
@@ -780,6 +780,33 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
                     raise SpeciesPopulationError("molecular weight not available for '{}'".format(
                         specie_id))
         return mass/Avogadro
+
+    def invalid_weights(self, species_ids=None):
+        """ Find the species that do not have a positive, numerical molecular weight
+
+        Args:
+            species_ids (:obj:`list` of `str`, optional): identifiers of the species whose molecular weights
+                will be checked; if not provided, then check all species
+
+        Returns:
+            :obj:`set`: the ids of species that do not have a positive, numerical molecular weight
+        """
+        if species_ids is None:
+            species_ids = self._all_species()
+        species_with_invalid_mw = set()
+        for specie_id in species_ids:
+            try:
+                mw = self._molecular_weights[specie_id]
+            except KeyError:
+                species_with_invalid_mw.add(specie_id)
+                continue
+            try:
+                if 0 < mw:
+                    continue
+                species_with_invalid_mw.add(specie_id)
+            except (TypeError, ValueError):
+                species_with_invalid_mw.add(specie_id)
+        return species_with_invalid_mw
 
     def log_event(self, message, specie):
         """ Log an event that modifies a specie's population
