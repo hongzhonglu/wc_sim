@@ -164,10 +164,10 @@ class SSASubmodel(DynamicSubmodel):
         self.log_with_time("submodel: {}; proportional_propensities: {}".format(self.id, proportional_propensities))
 
         # avoid reactions with inadequate specie counts
-        # TODO(Arthur): incorporate generalization in the COPASI paper
         enabled_reactions = self.identify_enabled_reactions()
         proportional_propensities = enabled_reactions * proportional_propensities
         total_proportional_propensities = np.sum(proportional_propensities)
+        assert not math.isnan(total_proportional_propensities), "total propensities is 'NaN'"   # pragma, no cover
         if total_proportional_propensities == 0 and self.get_num_submodels() == 1:
             raise MultialgorithmError("A simulation with 1 SSA submodel and total propensities = 0 cannot progress")
         return (proportional_propensities, total_proportional_propensities)
@@ -209,7 +209,6 @@ class SSASubmodel(DynamicSubmodel):
             :obj:`float`: the delay until the next SSA reaction, or `None` if no reaction is scheduled
         """
         (propensities, total_propensities) = self.determine_reaction_propensities()
-        assert not math.isnan(total_propensities), "total propensities is 'NaN'"
 
         if total_propensities == 0:
             self.schedule_SsaWait()
