@@ -24,7 +24,7 @@ from wc_sim.core.simulation_engine import SimulationEngine
 from wc_sim.core.simulation_object import SimulationObject
 from wc_sim.core.simulation_message import SimulationMessage
 from wc_sim.multialgorithm import message_types
-from wc_sim.multialgorithm.species_populations import (LOCAL_POP_STORE, Specie, SpeciesPopSimObject,
+from wc_sim.multialgorithm.species_populations import (LOCAL_POP_STORE, DynamicSpecie, SpeciesPopSimObject,
     SpeciesPopulationCache, LocalSpeciesPopulation, MakeTestLSP, AccessSpeciesPopulations)
 from wc_sim.multialgorithm.multialgorithm_errors import NegativePopulationError, SpeciesPopulationError
 from wc_sim.multialgorithm import distributed_properties
@@ -523,21 +523,21 @@ class TestSpecie(unittest.TestCase):
 
     def test_specie(self):
 
-        s1 = Specie('specie', self.random_state, 10)
+        s1 = DynamicSpecie('specie', self.random_state, 10)
         self.assertEqual(s1.get_population(), 10)
         self.assertEqual(s1.discrete_adjustment(1, 0), 11)
         self.assertEqual(s1.get_population(), 11)
         self.assertEqual(s1.discrete_adjustment(-1, 0), 10)
         self.assertEqual(s1.get_population(), 10)
 
-        s2 = Specie('specie_3', self.random_state, 2, 1)
+        s2 = DynamicSpecie('specie_3', self.random_state, 2, 1)
         self.assertEqual(s2.discrete_adjustment(3, 4), 9)
 
-        s3 = Specie('specie2', self.random_state, 10)
+        s3 = DynamicSpecie('specie2', self.random_state, 10)
         self.assertEqual("specie_name: specie2; last_population: 10", str(s3))
         self.assertRegex(s3.row(), 'specie2\t10.*')
 
-        s4 = Specie('specie', self.random_state, 10, initial_flux=0)
+        s4 = DynamicSpecie('specie', self.random_state, 10, initial_flux=0)
         self.assertEqual("specie_name: specie; last_population: 10; continuous_time: 0; "
             "continuous_flux: 0", str(s4))
         self.assertRegex(s4.row(), 'specie\t10\..*\t0\..*\t0\..*')
@@ -568,14 +568,14 @@ class TestSpecie(unittest.TestCase):
         self.assertIn('get_population(): time < self.continuous_time', str(context.exception))
 
         with self.assertRaises(SpeciesPopulationError) as context:
-            Specie('specie', self.random_state, 10).continuous_adjustment(2, 2, 1)
+            DynamicSpecie('specie', self.random_state, 10).continuous_adjustment(2, 2, 1)
         self.assertIn('initial flux was not provided', str(context.exception))
 
-        self.assertRegex(Specie.heading(), 'specie_name\t.*')
+        self.assertRegex(DynamicSpecie.heading(), 'specie_name\t.*')
 
         # raise asserts
         with self.assertRaises(AssertionError) as context:
-            Specie('specie', self.random_state, -10)
+            DynamicSpecie('specie', self.random_state, -10)
         self.assertIn('__init__(): population should be >= 0', str(context.exception))
 
     def test_species_with_interpolation_false(self):
@@ -584,7 +584,7 @@ class TestSpecie(unittest.TestCase):
         existing_interpolate = config_multialgorithm['interpolate']
         config_multialgorithm['interpolate'] = False
 
-        s1 = Specie('specie', self.random_state, 10, initial_flux=1)
+        s1 = DynamicSpecie('specie', self.random_state, 10, initial_flux=1)
         self.assertEqual(s1.get_population(time=0), 10)
         self.assertEqual(s1.get_population(time=1), 10)
         # change back because all imports may already have been cached
@@ -612,7 +612,7 @@ class TestSpecie(unittest.TestCase):
         self.assertTrue(n1 in d)
 
     def test_raise_NegativePopulationError(self):
-        s1 = Specie('specie_3', self.random_state, 2, -2.0)
+        s1 = DynamicSpecie('specie_3', self.random_state, 2, -2.0)
 
         with self.assertRaises(NegativePopulationError) as context:
             s1.discrete_adjustment(-3, 0)
@@ -630,7 +630,7 @@ class TestSpecie(unittest.TestCase):
             s1.get_population(2)
         self.assertEqual(context.exception, NegativePopulationError('get_population', 'specie_3', 2, -4.0, 2))
 
-        s1 = Specie('specie_3', self.random_state, 3)
+        s1 = DynamicSpecie('specie_3', self.random_state, 3)
         self.assertEqual(s1.get_population(1), 3)
 
         with self.assertRaises(NegativePopulationError) as context:
@@ -638,7 +638,7 @@ class TestSpecie(unittest.TestCase):
         self.assertEqual(context.exception, NegativePopulationError('discrete_adjustment', 'specie_3', 3, -4))
 
     def test_Specie_stochastic_rounding(self):
-        s1 = Specie('specie', self.random_state, 10.5)
+        s1 = DynamicSpecie('specie', self.random_state, 10.5)
 
         samples = 1000
         for i in range(samples):
@@ -650,7 +650,7 @@ class TestSpecie(unittest.TestCase):
         max = 10 + binom.ppf(0.99, n=samples, p=0.5) / samples
         self.assertTrue(min <= mean <= max)
 
-        s1 = Specie('specie', self.random_state, 10.5, initial_flux=0)
+        s1 = DynamicSpecie('specie', self.random_state, 10.5, initial_flux=0)
         s1.continuous_adjustment(0, 1, 0.25)
         for i in range(samples):
             self.assertEqual(s1.get_population(3), 11.0)
@@ -755,7 +755,7 @@ class TestSpeciesPopSimObjectWithAnotherSimObject(unittest.TestCase):
         Test AdjustPopulationByContinuousSubmodel.
 
         Note that the expected_value does not include a term for update_time*s_init_flux. This is
-        deliberately ignored by `wc_sim.multialgorithm.species_populations.Specie()` because it is
+        deliberately ignored by `wc_sim.multialgorithm.species_populations.DynamicSpecie()` because it is
         assumed that an adjustment by a continuous submodel will incorporate the flux predicted by
         the previous iteration of that submodel.
         """

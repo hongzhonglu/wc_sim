@@ -520,8 +520,8 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
     Attributes:
         name (:obj:`str`): the name of this object.
         time (:obj:`float`): the time of the most recent access to this `LocalSpeciesPopulation`
-        _population (:obj:`dict` of :obj:`Specie`): map: specie_id -> Specie(); the species whose
-            counts are stored, represented by Specie objects.
+        _population (:obj:`dict` of :obj:`DynamicSpecie`): map: specie_id -> DynamicSpecie(); the species whose
+            counts are stored, represented by DynamicSpecie objects.
         _molecular_weights (:obj:`dict` of `float`): map: specie_id -> molecular_weight; the
             molecular weight of each specie
         last_access_time (:obj:`dict` of `float`): map: species_name -> last_time; the last time at
@@ -532,7 +532,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
     """
     # TODO(Arthur): support tracking the population history of species added at any time
     # in the simulation
-    # TODO(Arthur): report an error if a Specie is updated by multiple continuous submodels
+    # TODO(Arthur): report an error if a DynamicSpecie is updated by multiple continuous submodels
     # because each of them assumes that they model all changes to its population over their time step
     # TODO(Arthur): molecular_weights should provide MW of each species type, as that's what the model has
     def __init__(self, name, initial_population, molecular_weights, initial_fluxes=None,
@@ -601,7 +601,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         if specie_id in self._population:
             raise SpeciesPopulationError("specie_id '{}' already stored by this "
                 "LocalSpeciesPopulation".format(specie_id))
-        self._population[specie_id] = Specie(specie_id, self.random_state, population,
+        self._population[specie_id] = DynamicSpecie(specie_id, self.random_state, population,
             initial_flux=initial_flux_given)
         self.last_access_time[specie_id] = self.time
         self._add_to_history(specie_id)
@@ -816,7 +816,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
 
         Args:
             message (:obj:`str`): description of the event's type.
-            specie (:obj:`Specie`): the object whose adjustment is being logged
+            specie (:obj:`DynamicSpecie`): the object whose adjustment is being logged
         """
         try:
             flux = specie.continuous_flux
@@ -932,7 +932,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             lines.append("#times\tfirst\tlast")
             lines.append("{}\t{}\t{}".format(len(self._history['time']), self._history['time'][0],
                 self._history['time'][-1]))
-            lines.append("Specie\t#values\tfirst\tlast")
+            lines.append("DynamicSpecie\t#values\tfirst\tlast")
             for s in self._history['population'].keys():
                 lines.append("{}\t{}\t{:.1f}\t{:.1f}".format(s, len(self._history['population'][s]),
                     self._history['population'][s][0], self._history['population'][s][-1]))
@@ -953,7 +953,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         state=[]
         state.append('name: {}'.format(self.name))
         state.append('time: {}'.format(str(self.time)))
-        state.append(Specie.heading())
+        state.append(DynamicSpecie.heading())
         for specie_id in sorted(self._population.keys()):
             state.append(self._population[specie_id].row())
         return '\n'.join(state)
@@ -1115,9 +1115,8 @@ class SpeciesPopSimObject(LocalSpeciesPopulation, ApplicationSimulationObject,
     messages_sent = [message_types.GivePopulation, message_types.GiveProperty]
 
 
-# TODO(Arthur): rename to DynamicSpecies
-class Specie(object):
-    """ Specie tracks the population of a single specie in a multi-algorithmic model
+class DynamicSpecie(object):
+    """ DynamicSpecie tracks the population of a single specie in a multi-algorithmic model
 
     A specie is a shared object that can be read and written by multiple submodels in a
     multi-algorithmic model. We assume that a sequence of accesses of a specie instance will
