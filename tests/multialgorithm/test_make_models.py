@@ -12,7 +12,7 @@ import tempfile
 
 from wc_lang.io import Writer, Reader
 from wc_lang.core import RateLawDirection
-from wc_sim.multialgorithm.make_models import MakeModels, RateLawType
+from wc_sim.multialgorithm.make_models import MakeModels, RateLawType, ModelFromKB
 
 
 class TestMakeModels(unittest.TestCase):
@@ -134,3 +134,22 @@ class TestMakeModels(unittest.TestCase):
         # test exception
         with self.assertRaises(ValueError):
             MakeModels.make_test_model('3 reactions')
+
+
+class TestGetModelFromKB(unittest.TestCase):
+
+    def setUp(self):
+        self.SIM_TEST_WC_KB = os.path.join(os.path.dirname(__file__), 'fixtures', 'sim_test_wc_kb.xlsx')
+        self.SIM_TEST_WC_KB_SEQ = os.path.join(os.path.dirname(__file__), 'fixtures', 'sim_test_seq.fna')
+
+    def test_run(self):
+        model_from_kb = ModelFromKB(self.SIM_TEST_WC_KB, self.SIM_TEST_WC_KB_SEQ)
+        model = model_from_kb.run()
+
+        # test write - read round-trip
+        with tempfile.NamedTemporaryFile(suffix='.xlsx') as fp:
+            Writer().run(model, fp.name, set_repo_metadata_from_path=False)
+            # according to the NamedTemporaryFile docs, reading fp.name will fail on Windows NT or later:
+            model_from_file = Reader().run(fp.name, strict=False)
+            self.assertTrue(model.is_equal(model_from_file))
+            self.assertTrue(model_from_file.is_equal(model))

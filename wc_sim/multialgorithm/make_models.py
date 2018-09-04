@@ -12,6 +12,9 @@ import re
 import numpy as np
 from scipy.constants import Avogadro
 
+import wc_kb
+import wc_model_gen
+from wc_model_gen.prokaryote.metabolism import MetabolismSubmodelGenerator
 from obj_model import utils
 from wc_utils.util.enumerate import CaseInsensitiveEnum
 from wc_lang.io import Reader, Writer
@@ -250,4 +253,32 @@ class MakeModels(object):
         for base_model in [Submodel,  SpeciesType, Reaction, Observable, Compartment, Parameter]:
             base_model.get_manager().insert_all_new()
 
+        return model
+
+
+class ModelFromKB(object):
+    """ Create a test model from a wc_kb database
+    """
+
+    def __init__(self, model_kb, model_seq):
+        """
+        Args:
+            model_kb (:obj:`str`): file pathname to a model knowledgebase
+            model_seq (:obj:`str`): file pathname to a model DNA sequence
+        """
+        self.model_kb = model_kb
+        self.model_seq = model_seq
+
+    def run(self):
+        kb_reader = wc_kb.io.Reader()
+        knowledge_base = kb_reader.run(self.model_kb, self.model_seq)
+
+        # use just metabolism to create test reactions
+        generator = wc_model_gen.ModelGenerator(knowledge_base,
+            component_generators=[MetabolismSubmodelGenerator],
+            options={
+                'id': 'test_sim',
+                'version': '0.0.1',
+        })
+        model = generator.run()
         return model
