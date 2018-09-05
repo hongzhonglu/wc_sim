@@ -74,6 +74,10 @@ class TestMakeModels(unittest.TestCase):
                 self.assertTrue(round_trip_model.is_equal(model))
                 self.assertEqual(model.difference(round_trip_model), '')
 
+                # ensure default compartment.type
+                for compartment in model.compartments:
+                    self.assertEqual(compartment.type, CompartmentType.biochemical)
+
         # unittest one of the models made
         # TODO (ARTHUR): test with multiple submodels
         # TODO (ARTHUR): test observables
