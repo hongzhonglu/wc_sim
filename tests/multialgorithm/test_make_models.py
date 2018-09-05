@@ -11,7 +11,7 @@ import shutil
 import tempfile
 
 from wc_lang.io import Writer, Reader
-from wc_lang.core import RateLawDirection
+from wc_lang.core import RateLawDirection, CompartmentType
 from wc_sim.multialgorithm.make_models import MakeModels, RateLawType, ModelFromKB
 
 
@@ -145,6 +145,10 @@ class TestGetModelFromKB(unittest.TestCase):
     def test_run(self):
         model_from_kb = ModelFromKB(self.SIM_TEST_WC_KB, self.SIM_TEST_WC_KB_SEQ)
         model = model_from_kb.run()
+
+        # ensure default compartment.type
+        for compartment in model.compartments:
+            self.assertEqual(compartment.type, CompartmentType.biochemical)
 
         # test write - read round-trip
         with tempfile.NamedTemporaryFile(suffix='.xlsx') as fp:
