@@ -14,7 +14,7 @@ from scipy.constants import Avogadro
 
 import wc_kb
 import wc_model_gen
-from wc_model_gen.prokaryote.metabolism import MetabolismSubmodelGenerator
+import wc_model_gen.prokaryote as prokaryote
 from obj_model import utils
 from wc_utils.util.enumerate import CaseInsensitiveEnum
 from wc_lang.io import Reader, Writer
@@ -274,11 +274,27 @@ class ModelFromKB(object):
         knowledge_base = kb_reader.run(self.model_kb, self.model_seq)
 
         # use just metabolism to create test reactions
-        generator = wc_model_gen.ModelGenerator(knowledge_base,
-            component_generators=[MetabolismSubmodelGenerator],
+        generator = prokaryote.ProkaryoteModelGenerator(
+            knowledge_base,
+            component_generators=[
+                prokaryote.InitalizeModel,
+                prokaryote.MetabolismSubmodelGenerator],
             options={
                 'id': 'test_sim',
                 'version': '0.0.1',
-        })
+                'component': {
+                    'InitalizeModel': {
+                        'gen_metabolic_species': True,
+                        'gen_rna': False,
+                        'gen_protein': False,
+                        'gen_complexes': False,
+                        'gen_concentrations': True,
+                        'gen_observables': False,
+                        'gen_kb_reactions': True,
+                        'gen_kb_rate_laws': True
+                    }
+                }
+            }
+        )
         model = generator.run()
         return model
