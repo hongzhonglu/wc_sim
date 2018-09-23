@@ -146,6 +146,7 @@ class TestGetModelFromKB(unittest.TestCase):
         self.SIM_TEST_WC_KB = os.path.join(os.path.dirname(__file__), 'fixtures', 'sim_test_wc_kb.xlsx')
         self.SIM_TEST_WC_KB_SEQ = os.path.join(os.path.dirname(__file__), 'fixtures', 'sim_test_seq.fna')
 
+    @unittest.skip('ModelFromKB depends on a future fix of wc_model_gen; see issue #14')
     def test_run(self):
         model_from_kb = ModelFromKB(self.SIM_TEST_WC_KB, self.SIM_TEST_WC_KB_SEQ)
         model = model_from_kb.run()
