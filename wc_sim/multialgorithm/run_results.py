@@ -9,6 +9,7 @@ import numpy
 import os
 import pandas
 import pickle
+import warnings
 
 from wc_utils.util.misc import as_dict
 from wc_sim.log.checkpoint import Checkpoint
@@ -59,12 +60,22 @@ class RunResults(object):
             observables_df.to_hdf(self._hdf_file(), 'observables')
             # aggregate states
             aggregate_states_df.to_hdf(self._hdf_file(), 'aggregate_states')
-            # random states
-            random_states_s.to_hdf(self._hdf_file(), 'random_states')
+            # todo (Arthur): address performance warning raised by pandas/io/pytables for the next two to_hdf() calls:
+            '''
+                /usr/local/lib/python3.6/site-packages/pandas/core/generic.py:1996 PerformanceWarning: 
+                your performance may suffer as PyTables will pickle object types that it cannot
+                map directly to c-types [inferred_type->mixed,key->values] [items->None]
+            '''
+            # Temporarily, these warnings are being suppressed by the 'with warnings.catch_warnings()' context manager
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
 
-            # metadata
-            metadata_s = self.convert_metadata()
-            metadata_s.to_hdf(self._hdf_file(), 'metadata')
+                # random states
+                random_states_s.to_hdf(self._hdf_file(), 'random_states')
+
+                # metadata
+                metadata_s = self.convert_metadata()
+                metadata_s.to_hdf(self._hdf_file(), 'metadata')
 
             self._load_hdf_file()
 
