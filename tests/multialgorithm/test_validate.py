@@ -12,22 +12,22 @@ import shutil
 import pandas
 import numpy as np
 import math
+import datetime
 
 import obj_model
 from wc_sim.multialgorithm.validate import (ValidationError, SubmodelValidator, SsaValidator, FbaValidator,
     OdeValidator, ValidationTestCaseType, ValidationTestReader, ResultsComparator,
-    ResultsComparator, ValidationTestRunner, ValidationSuite, ValidationUtilities, TEST_CASE_COMPARTMENT)
+    ResultsComparator, CaseValidator, ValidationSuite, ValidationUtilities, TEST_CASE_TYPE_TO_DIR,
+    TEST_CASE_COMPARTMENT)
 from wc_sim.multialgorithm.run_results import RunResults
 
 TEST_CASES = os.path.join(os.path.dirname(__file__), 'fixtures', 'validation', 'test_cases')
-# todo: integrate this with ValidationTestCaseType
-TEST_CASE_TYPE_TO_DIR = {
-    'continuous_deterministic': 'semantic',
-    'discrete_stochastic': 'stochastic'}
+
+def make_test_case_dir(test_case_num, test_case_type='discrete_stochastic'):
+    return os.path.join(TEST_CASES, TEST_CASE_TYPE_TO_DIR[test_case_type], test_case_num)
 
 def make_validation_test_reader(test_case_num, test_case_type='discrete_stochastic'):
-    test_case_dir = os.path.join(TEST_CASES, TEST_CASE_TYPE_TO_DIR[test_case_type], test_case_num)
-    return ValidationTestReader(test_case_type, test_case_dir, test_case_num)
+    return ValidationTestReader(test_case_type, make_test_case_dir(test_case_num, test_case_type), test_case_num)
 
 
 class TestValidationTestReader(unittest.TestCase):
@@ -101,7 +101,8 @@ class TestResultsComparator(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.test_case_type = 'continuous_deterministic'
         self.test_case_num = '00001'
-        self.simulation_run_results = self.make_run_results_from_expected_results(self.test_case_type, self.test_case_num)
+        self.simulation_run_results = self.make_run_results_from_expected_results(self.test_case_type,
+            self.test_case_num)
 
     def make_run_results_filename(self):
         return os.path.join(tempfile.mkdtemp(dir=self.tmp_dir), 'run_results.h5')
@@ -192,20 +193,6 @@ class TestResultsComparator(unittest.TestCase):
     def restore_pd_value(self, df, loc):
         df.loc[loc[0], loc[1]] = self.stashed_pd_value
 
-    @staticmethod
-    def get_test_pop_mean(time, n_runs, expected_df, desired_Z):
-        # solve Z = math.sqrt(n_runs)*(pop_mean - e_mean)/e_sd for pop_mean:
-        # pop_mean = Z*e_sd/math.sqrt(n_runs) + e_mean
-        # return pop_mean for desired_Z
-        return desired_Z * expected_df.loc[time, 'X-sd'] / math.sqrt(n_runs) + \
-            expected_df.loc[time, 'X-mean']
-
-    @staticmethod
-    def set_all_pops(run_results_list, time, pop_val):
-        # set all pops to pop_val
-        for rr in run_results_list:
-            rr.get('populations').loc[time, 'X'] = pop_val
-
     def test_results_comparator_discrete_stochastic(self):
         # todo: move code that's common with test_results_comparator_continuous_deterministic to function
         # todo: test multiple amount variables
@@ -237,7 +224,7 @@ class TestResultsComparator(unittest.TestCase):
         results_comparator = ResultsComparator(validation_test_reader, run_results)
         self.assertEqual(False, results_comparator.differs())
 
-        # adjust data to test all Z thresholds
+        ### adjust data to test all Z thresholds ###
         # choose an arbitrary time
         time = 10
 
@@ -256,9 +243,22 @@ class TestResultsComparator(unittest.TestCase):
             (upper_range - epsilon, False),
             (upper_range + epsilon, ['X'])
         ]
+
+        def get_test_pop_mean(time, n_runs, expected_df, desired_Z):
+            # solve Z = math.sqrt(n_runs)*(pop_mean - e_mean)/e_sd for pop_mean:
+            # pop_mean = Z*e_sd/math.sqrt(n_runs) + e_mean
+            # return pop_mean for desired_Z
+            return desired_Z * expected_df.loc[time, 'X-sd'] / math.sqrt(n_runs) + \
+                expected_df.loc[time, 'X-mean']
+
+        def set_all_pops(run_results_list, time, pop_val):
+            # set all pops to pop_val
+            for rr in run_results_list:
+                rr.get('populations').loc[time, 'X'] = pop_val
+
         for test_z_score, expected_differ in z_scores_and_expected_differs:
-            test_pop_mean = self.get_test_pop_mean(time, n_runs, expected_predictions_df, test_z_score)
-            self.set_all_pops(run_results, time, test_pop_mean)
+            test_pop_mean = get_test_pop_mean(time, n_runs, expected_predictions_df, test_z_score)
+            set_all_pops(run_results, time, test_pop_mean)
             results_comparator = ResultsComparator(validation_test_reader, run_results)
             self.assertEqual(expected_differ, results_comparator.differs())
 
@@ -294,3 +294,56 @@ class TestResultsComparator(unittest.TestCase):
         del validation_test_reader.settings['absolute']
         tolerances = results_comparator.prepare_tolerances()
         self.assertEqual(tolerances['atol'], default_tolerances['atol'])
+
+
+class TestCaseValidator(unittest.TestCase):
+
+    def setUp(self):
+        self.test_case_num = '00101'
+        self.case_validator = CaseValidator(TEST_CASES, 'discrete_stochastic', self.test_case_num)
+        self.tmp_dir = os.path.join(os.path.dirname(__file__), 'tmp')
+
+    def test_case_validator_errors(self):
+        settings = self.case_validator.validation_test_reader.settings
+        del settings['duration']
+        with self.assertRaisesRegexp(ValidationError, "required setting .* not provided"):
+            self.case_validator.validate_model()
+        settings['duration'] = 'not a float'
+        with self.assertRaisesRegexp(ValidationError, "required setting .* not a float"):
+            self.case_validator.validate_model()
+        settings['duration'] = 10.
+        settings['start'] = 3
+        with self.assertRaisesRegexp(ValidationError, "non-zero start setting .* not supported"):
+            self.case_validator.validate_model()
+
+    def make_plot_file(self):
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+        plot_file = os.path.join(self.tmp_dir, 'discrete_stochastic', "{}_{}.pdf".format(self.test_case_num, timestamp))
+        os.makedirs(os.path.dirname(plot_file), exist_ok=True)
+        return plot_file
+
+    def test_case_validator_discrete_stochastic(self):
+        self.assertFalse(self.case_validator.validate_model())
+        plot_file = self.make_plot_file()
+        self.assertFalse(self.case_validator.validate_model(num_discrete_stochastic_runs=10,
+            plot_file=plot_file))
+        self.assertTrue(os.path.isfile(plot_file))
+
+        # test validation failure
+        expected_preds_df = self.case_validator.validation_test_reader.expected_predictions_df
+        expected_preds_array = expected_preds_df.loc[:, 'X-mean'].values
+        expected_preds_df.loc[:, 'X-mean'] = np.full(expected_preds_array.shape, 0)
+        self.assertEqual(['X'], self.case_validator.validate_model(num_discrete_stochastic_runs=5,
+            discard_run_results=False, plot_file=self.make_plot_file()))
+
+
+class TestValidationUtilities(unittest.TestCase):
+
+    def test_get_default_args(self):
+
+        defaults = {'a': None,
+            'b': 17,
+            'c': frozenset(range(3))}
+        def func(y, a=defaults['a'], b=defaults['b'], c=defaults['c']):
+            pass
+        self.assertEqual(defaults, ValidationUtilities.get_default_args(func))
