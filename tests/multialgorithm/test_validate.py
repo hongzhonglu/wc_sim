@@ -300,6 +300,7 @@ class TestCaseValidator(unittest.TestCase):
 
     def setUp(self):
         self.test_case_num = '00101'
+        self.test_case_num = '00001'
         self.case_validator = CaseValidator(TEST_CASES, 'discrete_stochastic', self.test_case_num)
         self.tmp_dir = os.path.join(os.path.dirname(__file__), 'tmp')
 

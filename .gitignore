@@ -78,3 +78,6 @@ tmp
 #################
 .ipynb_checkpoints
 
+# Excel backup files #
+######################
+~$*.xlsx

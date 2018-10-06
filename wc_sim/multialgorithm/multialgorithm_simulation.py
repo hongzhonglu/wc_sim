@@ -17,7 +17,7 @@ from obj_model import utils
 from wc_utils.util.list import difference, det_dedupe
 from wc_utils.util.misc import obj_to_str
 from wc_lang import SubmodelAlgorithm, Model, SpeciesType, Species, RateLawEquation
-from wc_sim.multialgorithm.dynamic_components import DynamicModel, DynamicCompartment
+from wc_sim.multialgorithm.dynamic_components import DynamicModel, DynamicCompartment, DynamicCompartmentType
 from wc_sim.core.simulation_engine import SimulationEngine
 from wc_sim.multialgorithm import message_types
 from wc_sim.multialgorithm.model_utilities import ModelUtilities
@@ -26,7 +26,7 @@ from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 from wc_sim.multialgorithm.submodels.dynamic_submodel import DynamicSubmodel
 from wc_sim.multialgorithm.submodels.ssa import SSASubmodel
 from wc_sim.multialgorithm.submodels.fba import FbaSubmodel
-from wc_sim.multialgorithm.species_populations import LOCAL_POP_STORE, Specie, SpeciesPopSimObject
+from wc_sim.multialgorithm.species_populations import LOCAL_POP_STORE, SpeciesPopSimObject
 from wc_sim.multialgorithm.multialgorithm_checkpointing import MultialgorithmicCheckpointingSimObj
 from wc_sim.core.sim_metadata import SimulationMetadata
 
@@ -76,31 +76,6 @@ Algs:
         #. Have SimulationObjects send their initial messages
 """
 
-"""
-Density remains constant
-
-SimSubmodels only share memory with each other through read-only objects and a species population object.
-What does a DynamicSubmodel need?:
-    Part of a static WCmodel, with rate laws (but only part of it; could copy it and remove unnecessary parts):
-        Write a filter, that removes specified parts of a Model.
-        The subsets of these data that are involved in reactions modeled by the DynamicSubmodel:
-            Species_types: id, molecular weight, empirical_formula
-            Species: id, population, etc.
-            Compartments: id,
-            Reactions: participants, reversible
-            RateLaw: reaction, direction, equation, etc.
-            RateLawEquation: transcoded, modifiers
-    Local attributes:
-        id, a dynamic compartment, reference to a shared population
-
-Each SimulationObject must run either 1) on another processor, or 2) in another thread and not
-share memory. How does ROSS handle various levels of parallelism -- multiple SimObjs in one thread;
-multiple SimObjs on different cores or processors?
-
-Direct exchange of species count changes for shared species through a shared membrane vs. exchange of
-species copy number changes through shared population.
-"""
-
 
 # TODO (Arthur): put in config file
 DEFAULT_VALUES = dict(
@@ -119,7 +94,7 @@ class MultialgorithmSimulation(object):
         init_populations (:obj: dict from species id to population): the initial populations of
             species, as specified by `model`
         simulation (:obj: `SimulationEngine`): the initialized simulation
-        simulation_submodels (:obj: `list` of `DynamicSubmodel`): the simulation's submodels
+        simulation_submodels (:obj: `list` of `DynamicSubmodel`): the simulation's dynamic submodels
         checkpointing_sim_obj (:obj: `MultialgorithmicCheckpointingSimObj`): the checkpointing object;
             `None` if absent
         species_pop_objs (:obj: `dict` of `SpeciesPopSimObject`): shared species
@@ -127,7 +102,7 @@ class MultialgorithmSimulation(object):
         shared_specie_store_name (:obj:`str`): the name for the shared specie store
         dynamic_model (:obj: `DynamicModel`): the dynamic state of a model
         private_species (:obj: `dict` of `set`): map from `DynamicSubmodel` to a set of the species
-                modeled by only the submodel
+            modeled by only the submodel
         shared_species (:obj: `set`): the shared species
         local_species_population (:obj: `LocalSpeciesPopulation`): a shared species population for the
             multialgorithm simulation
@@ -291,7 +266,6 @@ class MultialgorithmSimulation(object):
             :obj:`dict`: mapping: compartment id -> `DynamicCompartment` for the
                 `DynamicCompartment`(s) used by this multialgorithmic simulation
         """
-        # make DynamicCompartments
         dynamic_compartments = {}
         for compartment in model.get_compartments():
             dynamic_compartments[compartment.id] = DynamicCompartment(compartment, local_species_pop)
@@ -358,7 +332,7 @@ class MultialgorithmSimulation(object):
         """ Create dynamic submodels that access shared species
 
         Returns:
-            :obj:`dict`: mapping `submodel.id` to `DynamicSubmodel`: the simulation's dynamic submodels
+            :obj:`list` of `DynamicSubmodel`: the simulation's dynamic submodels
 
         Raises:
             :obj:`MultialgorithmError`: if a submodel cannot be created

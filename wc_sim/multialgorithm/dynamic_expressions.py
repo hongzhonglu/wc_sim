@@ -28,14 +28,16 @@ from wc_lang.expression_utils import TokCodes, RateLawUtils
 # TODO:
 build:
     integrate into dynamic simulation
-    support parameters in rate_law.equation.expression by making it a DynamicExpression
+    make rate_law.equation.expression a DynamicExpression
     don't create duplicate DynamicSpecies, or any other Dynamic* object; generalize creation this to get_or_create()
     make all of DynamicSubmodel's methods handle DynamicReactions, & replace self.reactions w self.dynamic_reactions
-    think about and support reactants and modifiers in multiple compartments
     in "return RateLawUtils.eval_rate_law(self, ..." raise exception if species_concentrations is None
+    combine FBA with SSA and Dynamic* objects; perhaps make SimulationSubmodel object and branch it
+        into DynamicSubmodel and StaticSubmodel
+    go back and replace MakeModel code with model_gen
 cleanup
     move dynamic_components to a more convenient place; cannot leave DynamicComponent defined in this file
-    jupyter examples
+    complete "Example dynamic expressions.ipynb"
     memoize performance comparison; decide whether to trash or finish implementing direct dependency tracking eval
     clean up memoize cache file?
 optimizations
@@ -426,10 +428,12 @@ class MassActionKinetics(DynamicComponent):
         self.id = rate_law.reaction.id
         self.dynamic_compartment = dynamic_compartment
         self.order = MassActionKinetics.molecularity(rate_law.reaction)
-        try:
-            self.rate_constant = float(rate_law.equation.expression)
-        except ValueError:
-            raise ValueError('rate_law.equation.expression not a float')
+        if rate_law.equation.modifiers:
+            raise ValueError('not a mass action rate law, as equation uses modifiers')
+        rate_law.equation.transcoded = RateLawUtils.transcode(rate_law.equation, {},
+            dynamic_model.dynamic_parameters.keys())
+        parameters = {id: dyn_param.eval(0) for id, dyn_param in dynamic_model.dynamic_parameters.items()}
+        self.rate_constant = RateLawUtils.eval_rate_law(rate_law, {}, parameters)
         self.reactants = []
         self.reactant_coefficients = []
         for part in rate_law.reaction.participants:
@@ -501,9 +505,9 @@ class MassActionKinetics(DynamicComponent):
             return False
         if not hasattr(rate_law, 'equation') or not hasattr(rate_law.equation, 'expression'):
             return False
-        try:
-            float(rate_law.equation.expression)
-        except ValueError:
+        # equation in a mass action rate law should evaluate to a constant, which will occur
+        # for any rate law that does not contain modifiers
+        if rate_law.equation.modifiers:
             return False
         molecularity = MassActionKinetics.molecularity(rate_law.reaction)
         if 2<molecularity:
@@ -671,7 +675,7 @@ class DynamicReaction(DynamicComponent):
     A `DynamicReaction` represents a single reaction in the simulator.
 
     Attributes:
-        dynamic_rate_law (:obj:`DynamicRateLaw`): the reaction's rate law
+        dynamic_rate_law (:obj:`DynamicRateLaw`): the reaction's rate law, if it has one
     """
     def __init__(self, dynamic_model, local_species_population, reaction):
         """
@@ -687,10 +691,11 @@ class DynamicReaction(DynamicComponent):
         super().__init__(dynamic_model, local_species_population, reaction)
 
         # prepare this reaction's rate law
-        compartment = reaction.submodel.compartment
-        dynamic_compartment = dynamic_model.dynamic_compartments[compartment.id]
-        self.dynamic_rate_law = DynamicRateLaw(dynamic_model, local_species_population, dynamic_compartment,
-            reaction.rate_laws[0])
+        if dynamic_model is not None and hasattr(reaction, 'rate_laws') and len(reaction.rate_laws):
+            compartment = reaction.submodel.compartment
+            dynamic_compartment = dynamic_model.dynamic_compartments[compartment.id]
+            self.dynamic_rate_law = DynamicRateLaw(dynamic_model, local_species_population, dynamic_compartment,
+                reaction.rate_laws[0])
 
     def __str__(self):
         """ Provide a readable representation of this `DynamicReaction`

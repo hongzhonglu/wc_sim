@@ -22,7 +22,7 @@ from wc_sim.multialgorithm.dynamic_expressions import (DynamicComponent, SimTokC
     DynamicRateLaw, DynamicReaction, DynamicSpecies, MassActionKinetics, WC_LANG_MODEL_TO_DYNAMIC_MODEL)
 from wc_sim.multialgorithm.species_populations import MakeTestLSP
 from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
-from wc_sim.multialgorithm.dynamic_components import DynamicModel, DynamicCompartment
+from wc_sim.multialgorithm.dynamic_components import DynamicModel
 from wc_sim.multialgorithm.make_models import MakeModels
 from wc_sim.multialgorithm.multialgorithm_simulation import MultialgorithmSimulation
 
@@ -246,6 +246,8 @@ def create_test_model(test_case):
         test_case.model = mdl = Model()
 
         mdl.parameters.create(id='fractionDryWeight', value=0.3, units='dimensionless')
+        mdl.parameters.create(id='param_1', value=1.5, units='dimensionless')
+        mdl.parameters.create(id='param_2', value=2.5, units='dimensionless')
 
         test_case.comp = comp = mdl.compartments.create(id='comp_id', name='compartment 0',
             initial_volume=1E-20)
@@ -331,6 +333,12 @@ def create_test_model(test_case):
             modifiers=[species[3]])
         test_case.rate_law_10 = rxn_10.rate_laws.create(equation=equation, k_cat=2, k_m=1)
 
+        # valid_functions = (ceil, floor, exp, pow, log, log10, min, max)
+        test_case.rxn_11 = rxn_11 = submdl_0.reactions.create(id='params_and_funcs')
+        equation = RateLawEquation(expression='max(param_1, 1) + floor(param_2)')
+        test_case.rate_law_11 = rxn_11.rate_laws.create(equation=equation, k_cat=2, k_m=1)
+        test_case.rate_law_11.value = 3.5
+
         multialgorithm_simulation = MultialgorithmSimulation(test_case.model, {})
         _, test_case.dynamic_model = multialgorithm_simulation.build_simulation()
         test_case.dynamic_submodel = multialgorithm_simulation.simulation_submodels[0]
@@ -365,9 +373,12 @@ class TestMassActionKinetics(unittest.TestCase):
         self.assertEqual([d.id for d in mass_action_kinetics.reactants],
             [s.get_id() for s in self.species[1:3]])
         self.assertEqual(mass_action_kinetics.reactant_coefficients, [1, 1])
-        with self.assertRaisesRegexp(ValueError, 'rate_law.equation.expression not a float'):
+        with self.assertRaisesRegexp(ValueError, 'not a mass action rate law, as equation uses modifiers'):
             MassActionKinetics(self.dynamic_model, self.species_pop, self.dynamic_compartment,
                 self.rate_law_8)
+        mass_action_kinetics = MassActionKinetics(self.dynamic_model, self.species_pop,
+            self.dynamic_compartment, self.rate_law_11)
+        self.assertEqual(mass_action_kinetics.rate_constant, self.rate_law_11.value)
 
     def test_mass_action_rate_law_asserts(self):
         mass_action_kinetics = MassActionKinetics(self.dynamic_model, self.species_pop,
