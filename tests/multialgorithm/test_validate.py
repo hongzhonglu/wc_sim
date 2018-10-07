@@ -21,7 +21,7 @@ from wc_sim.multialgorithm.validate import (ValidationError, SubmodelValidator, 
     TEST_CASE_COMPARTMENT)
 from wc_sim.multialgorithm.run_results import RunResults
 
-TEST_CASES = os.path.join(os.path.dirname(__file__), 'fixtures', 'validation', 'test_cases')
+TEST_CASES = os.path.join(os.path.dirname(__file__), 'fixtures', 'validation', 'testing')
 
 def make_test_case_dir(test_case_num, test_case_type='discrete_stochastic'):
     return os.path.join(TEST_CASES, TEST_CASE_TYPE_TO_DIR[test_case_type], test_case_num)
@@ -336,6 +336,27 @@ class TestCaseValidator(unittest.TestCase):
         expected_preds_df.loc[:, 'X-mean'] = np.full(expected_preds_array.shape, 0)
         self.assertEqual(['X'], self.case_validator.validate_model(num_discrete_stochastic_runs=5,
             discard_run_results=False, plot_file=self.make_plot_file()))
+
+
+class TestValidationSuite(unittest.TestCase):
+
+    def setUp(self):
+        self.test_cases_tuple = ('case#', 'dsmts#', 'MA order')
+        self.test_cases = [
+            # see: https://github.com/sbmlteam/sbml-test-suite/blob/master/cases/stochastic/DSMTS-userguide-31v2.pdf
+            ('00001', '001-01', (1, )),
+            ('00003', '001-03', (1, )),
+            ('00004', '001-04', (1, )),
+            ('00007', '001-07', (1, )),
+            ('00012', '001-12', (1, )),
+            ('00020', '002-01', (0, 1)),
+            ('00021', '002-02', (0, 1)),
+            ('00030', '003-01', (1, 2)),
+            ('00037', '004-01', (0, 1))
+        ]
+
+    def test_test_cases(self):
+        pass
 
 
 class TestValidationUtilities(unittest.TestCase):
