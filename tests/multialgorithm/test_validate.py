@@ -17,16 +17,16 @@ import datetime
 import obj_model
 from wc_sim.multialgorithm.validate import (ValidationError, SubmodelValidator, SsaValidator, FbaValidator,
     OdeValidator, ValidationTestCaseType, ValidationTestReader, ResultsComparator,
-    ResultsComparator, CaseValidator, ValidationSuite, ValidationUtilities, TEST_CASE_TYPE_TO_DIR,
-    TEST_CASE_COMPARTMENT)
+    ResultsComparator, CaseValidator, ValidationResultType, ValidationSuite, ValidationUtilities,
+    ValidationRunResult, TEST_CASE_TYPE_TO_DIR, TEST_CASE_COMPARTMENT)
 from wc_sim.multialgorithm.run_results import RunResults
 
 TEST_CASES = os.path.join(os.path.dirname(__file__), 'fixtures', 'validation', 'testing')
 
-def make_test_case_dir(test_case_num, test_case_type='discrete_stochastic'):
+def make_test_case_dir(test_case_num, test_case_type='DISCRETE_STOCHASTIC'):
     return os.path.join(TEST_CASES, TEST_CASE_TYPE_TO_DIR[test_case_type], test_case_num)
 
-def make_validation_test_reader(test_case_num, test_case_type='discrete_stochastic'):
+def make_validation_test_reader(test_case_num, test_case_type='DISCRETE_STOCHASTIC'):
     return ValidationTestReader(test_case_type, make_test_case_dir(test_case_num, test_case_type), test_case_num)
 
 
@@ -56,7 +56,7 @@ class TestValidationTestReader(unittest.TestCase):
             make_validation_test_reader('00005').read_settings()
 
     def test_read_expected_predictions(self):
-        for test_case_type in ['discrete_stochastic', 'continuous_deterministic']:
+        for test_case_type in ['DISCRETE_STOCHASTIC', 'CONTINUOUS_DETERMINISTIC']:
             validation_test_reader = make_validation_test_reader('00001', test_case_type=test_case_type)
             validation_test_reader.settings = validation_test_reader.read_settings()
             expected_predictions_df = validation_test_reader.read_expected_predictions()
@@ -71,8 +71,8 @@ class TestValidationTestReader(unittest.TestCase):
         # wrong columns
         missing_variable = 'MissingVariable'
         for test_case_type, expected_error in [
-            ('discrete_stochastic', "mean or sd of some amounts missing from expected predictions.*{}"),
-            ('continuous_deterministic', "some amounts missing from expected predictions.*{}")]:
+            ('DISCRETE_STOCHASTIC', "mean or sd of some amounts missing from expected predictions.*{}"),
+            ('CONTINUOUS_DETERMINISTIC', "some amounts missing from expected predictions.*{}")]:
             validation_test_reader = make_validation_test_reader('00001', test_case_type=test_case_type)
             validation_test_reader.settings = validation_test_reader.read_settings()
             validation_test_reader.settings['amount'].append(missing_variable)
@@ -99,7 +99,7 @@ class TestResultsComparator(unittest.TestCase):
 
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
-        self.test_case_type = 'continuous_deterministic'
+        self.test_case_type = 'CONTINUOUS_DETERMINISTIC'
         self.test_case_num = '00001'
         self.simulation_run_results = self.make_run_results_from_expected_results(self.test_case_type,
             self.test_case_num)
@@ -197,7 +197,7 @@ class TestResultsComparator(unittest.TestCase):
         # todo: move code that's common with test_results_comparator_continuous_deterministic to function
         # todo: test multiple amount variables
         # todo: consolidate setup
-        test_case_type = 'discrete_stochastic'
+        test_case_type = 'DISCRETE_STOCHASTIC'
         test_case_num = '00001'
         validation_test_reader = make_validation_test_reader(test_case_num, test_case_type)
         validation_test_reader.run()
@@ -299,9 +299,8 @@ class TestResultsComparator(unittest.TestCase):
 class TestCaseValidator(unittest.TestCase):
 
     def setUp(self):
-        self.test_case_num = '00101'
         self.test_case_num = '00001'
-        self.case_validator = CaseValidator(TEST_CASES, 'discrete_stochastic', self.test_case_num)
+        self.case_validator = CaseValidator(TEST_CASES, 'DISCRETE_STOCHASTIC', self.test_case_num)
         self.tmp_dir = os.path.join(os.path.dirname(__file__), 'tmp')
 
     def test_case_validator_errors(self):
@@ -319,7 +318,7 @@ class TestCaseValidator(unittest.TestCase):
 
     def make_plot_file(self):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
-        plot_file = os.path.join(self.tmp_dir, 'discrete_stochastic', "{}_{}.pdf".format(self.test_case_num, timestamp))
+        plot_file = os.path.join(self.tmp_dir, 'DISCRETE_STOCHASTIC', "{}_{}.pdf".format(self.test_case_num, timestamp))
         os.makedirs(os.path.dirname(plot_file), exist_ok=True)
         return plot_file
 
@@ -341,6 +340,97 @@ class TestCaseValidator(unittest.TestCase):
 class TestValidationSuite(unittest.TestCase):
 
     def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.validation_suite = ValidationSuite(TEST_CASES, self.tmp_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+
+    def test_init(self):
+        self.assertEqual(self.validation_suite.plot_dir, self.tmp_dir)
+        no_such_dir = os.path.join(self.tmp_dir, 'no_such_dir')
+        with self.assertRaisesRegexp(ValidationError, "cannot open cases_dir"):
+            ValidationSuite(no_such_dir)
+        with self.assertRaisesRegexp(ValidationError, "cannot open plot_dir"):
+            ValidationSuite(TEST_CASES, no_such_dir)
+
+    def test_record_result(self):
+        self.assertEqual(self.validation_suite.results, [])
+        sub_dir = os.path.join(self.tmp_dir, 'test_case_sub_dir')
+
+        result = ValidationRunResult(TEST_CASES, sub_dir, '00001', ValidationResultType.CASE_VALIDATED)
+        self.validation_suite._record_result(*result[1:])
+        self.assertEqual(len(self.validation_suite.results), 1)
+        self.assertEqual(self.validation_suite.results[-1], result)
+
+        result = ValidationRunResult(TEST_CASES, sub_dir, '00001', ValidationResultType.CASE_UNREADABLE, 'error')
+        self.validation_suite._record_result(*result[1:])
+        self.assertEqual(len(self.validation_suite.results), 2)
+        self.assertEqual(self.validation_suite.results[-1], result)
+
+        with self.assertRaisesRegexp(ValidationError, "result_type must be a ValidationResultType, not a"):
+            self.validation_suite._record_result(TEST_CASES, sub_dir, '00001', 'not a ValidationResultType')
+
+    def test_run_test(self):
+        test_case_num = '00001'
+        self.validation_suite._run_test('DISCRETE_STOCHASTIC', test_case_num)
+        results = self.validation_suite.results
+        self.assertEqual(results.pop().result_type, ValidationResultType.CASE_VALIDATED)
+        plot_file_name_prefix = 'DISCRETE_STOCHASTIC' + '_' + test_case_num
+        self.assertIn(plot_file_name_prefix, os.listdir(self.tmp_dir).pop())
+
+        # test without plotting
+        validation_suite = ValidationSuite(TEST_CASES)
+        validation_suite._run_test('DISCRETE_STOCHASTIC', test_case_num, num_stochastic_runs=5)
+        self.assertEqual(validation_suite.results.pop().result_type, ValidationResultType.CASE_VALIDATED)
+
+        # case unreadable
+        validation_suite = ValidationSuite(TEST_CASES)
+        self.validation_suite._run_test('stochastic', test_case_num, num_stochastic_runs=5)
+        self.assertEqual(results.pop().result_type, ValidationResultType.CASE_UNREADABLE)
+
+        # run fails
+        plot_dir = tempfile.mkdtemp()
+        validation_suite = ValidationSuite(TEST_CASES, plot_dir)
+        # delete plot_dir to create failure
+        shutil.rmtree(plot_dir)
+        validation_suite._run_test('DISCRETE_STOCHASTIC', test_case_num, num_stochastic_runs=5)
+        self.assertEqual(validation_suite.results.pop().result_type, ValidationResultType.FAILED_VALIDATION_RUN)
+
+        # run does not validate
+        validation_suite = ValidationSuite(TEST_CASES)
+        validation_suite._run_test('DISCRETE_STOCHASTIC', '00006', num_stochastic_runs=5)
+        self.assertEqual(validation_suite.results.pop().result_type, ValidationResultType.CASE_DID_NOT_VALIDATE)
+
+    def test_run(self):
+        # self.validation_suite = ValidationSuite(TEST_CASES, self.tmp_dir)
+        results = self.validation_suite.run('DISCRETE_STOCHASTIC', ['00001'], num_stochastic_runs=5)
+        self.assertEqual(results.pop().result_type, ValidationResultType.CASE_VALIDATED)
+
+        results = self.validation_suite.run('DISCRETE_STOCHASTIC', ['00001', '00006'], num_stochastic_runs=5)
+        expected_types = [ValidationResultType.CASE_VALIDATED, ValidationResultType.CASE_DID_NOT_VALIDATE]
+        result_types = [result_tuple.result_type for result_tuple in results[-2:]]
+        self.assertEqual(expected_types, result_types)
+
+        results = self.validation_suite.run('DISCRETE_STOCHASTIC', num_stochastic_runs=5)
+        self.assertEqual(expected_types, result_types)
+
+        results = self.validation_suite.run(num_stochastic_runs=5)
+        self.assertEqual(expected_types, result_types)
+
+        with self.assertRaisesRegexp(ValidationError, 'cases should be an iterator over case nums'):
+            self.validation_suite.run('DISCRETE_STOCHASTIC', '00001')
+
+        with self.assertRaisesRegexp(ValidationError, 'if cases provided then test_case_type_name must'):
+            self.validation_suite.run(cases=['00001'])
+
+        with self.assertRaisesRegexp(ValidationError, 'Unknown ValidationTestCaseType: '):
+            self.validation_suite.run(test_case_type_name='no such ValidationTestCaseType')
+
+
+class RunValidationSuite(unittest.TestCase):
+
+    def setUp(self):
         self.test_cases_tuple = ('case#', 'dsmts#', 'MA order')
         self.test_cases = [
             # see: https://github.com/sbmlteam/sbml-test-suite/blob/master/cases/stochastic/DSMTS-userguide-31v2.pdf
@@ -355,7 +445,7 @@ class TestValidationSuite(unittest.TestCase):
             ('00037', '004-01', (0, 1))
         ]
 
-    def test_test_cases(self):
+    def test_validation(self):
         pass
 
 

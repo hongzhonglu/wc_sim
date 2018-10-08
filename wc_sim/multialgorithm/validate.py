@@ -15,6 +15,7 @@ import pandas as pd
 import numpy as np
 import inspect
 import math
+from collections import namedtuple
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -75,12 +76,13 @@ class OdeValidator(SubmodelValidator):
 
 class ValidationTestCaseType(Enum):
     """ Types of test cases """
-    continuous_deterministic = 1    # algorithms like ODE
-    discrete_stochastic = 2         # algorithms like SSA
+    CONTINUOUS_DETERMINISTIC = 1    # algorithms like ODE
+    DISCRETE_STOCHASTIC = 2         # algorithms like SSA
 
+# todo: make the dirs the values of the Enum and get rid of TEST_CASE_TYPE_TO_DIR
 TEST_CASE_TYPE_TO_DIR = {
-    'continuous_deterministic': 'semantic',
-    'discrete_stochastic': 'stochastic'}
+    'CONTINUOUS_DETERMINISTIC': 'semantic',
+    'DISCRETE_STOCHASTIC': 'stochastic'}
 
 
 class ValidationTestReader(object):
@@ -139,7 +141,7 @@ class ValidationTestReader(object):
             raise ValidationError("times in settings '{}' differ from times in expected predictions '{}'".format(
                 self.settings_file, expected_predictions_file))
 
-        if self.test_case_type == ValidationTestCaseType.continuous_deterministic:
+        if self.test_case_type == ValidationTestCaseType.CONTINUOUS_DETERMINISTIC:
             # expected predictions should contain the mean and sd of each variable in 'amount'
             expected_columns = set(self.settings['amount'])
             actual_columns = set(expected_predictions_df.columns.values)
@@ -147,7 +149,7 @@ class ValidationTestReader(object):
                 raise ValidationError("some amounts missing from expected predictions '{}': {}".format(
                     expected_predictions_file, expected_columns - actual_columns))
 
-        if self.test_case_type == ValidationTestCaseType.discrete_stochastic:
+        if self.test_case_type == ValidationTestCaseType.DISCRETE_STOCHASTIC:
             # expected predictions should contain the mean and sd of each variable in 'amount'
             expected_columns = set()
             for amount in self.settings['amount']:
@@ -250,7 +252,7 @@ class ResultsComparator(object):
                 within tolerances, otherwise :obj:`list`: of species with differing values
         """
         differing_values = []
-        if self.validation_test_reader.test_case_type == ValidationTestCaseType.continuous_deterministic:
+        if self.validation_test_reader.test_case_type == ValidationTestCaseType.CONTINUOUS_DETERMINISTIC:
             kwargs = self.prepare_tolerances()
             populations_df = self.simulation_run_results.get('populations')
             # for each prediction, determine whether its trajectory is close enough to the expected predictions
@@ -260,7 +262,7 @@ class ResultsComparator(object):
                     differing_values.append(species_type)
             return differing_values or False
 
-        if self.validation_test_reader.test_case_type == ValidationTestCaseType.discrete_stochastic:
+        if self.validation_test_reader.test_case_type == ValidationTestCaseType.DISCRETE_STOCHASTIC:
             """ Test mean and sd population over multiple runs
 
             Follow algorithm in
@@ -325,7 +327,7 @@ class CaseValidator(object):
     def validate_model(self, num_discrete_stochastic_runs=None, discard_run_results=True, plot_file=None):
         """ Validate a model
         """
-        # todo: make this work for continuous_deterministic models
+        # todo: make this work for CONTINUOUS_DETERMINISTIC models
         '''
             todo: retry on failure
                 if failure, retry "evaluate whether mean of simulation trajectories match expected trajectory"
@@ -354,12 +356,12 @@ class CaseValidator(object):
             checkpoint_period=settings['duration']/settings['steps'],
             results_dir=tmp_results_dir)
 
-        if self.validation_test_reader.test_case_type == ValidationTestCaseType.continuous_deterministic:
+        if self.validation_test_reader.test_case_type == ValidationTestCaseType.CONTINUOUS_DETERMINISTIC:
             simulation = Simulation(self.validation_test_reader.model)
             _, results_dir = simulation.run(**simul_kwargs)
             simulation_run_results = RunResults(results_dir)
 
-        if self.validation_test_reader.test_case_type == ValidationTestCaseType.discrete_stochastic:
+        if self.validation_test_reader.test_case_type == ValidationTestCaseType.DISCRETE_STOCHASTIC:
             # make multiple simulation runs with different random seeds
             if num_discrete_stochastic_runs is not None:
                 num_runs = num_discrete_stochastic_runs
@@ -426,7 +428,7 @@ class CaseValidator(object):
     def plot_model_validation(self, plot_file):
         """Plot a model validation run
         """
-        # todo: make this work for continuous_deterministic models
+        # todo: make this work for CONTINUOUS_DETERMINISTIC models
         # todo: use matplotlib 3; use the more flexible OO API instead of pyplot
         # todo: optional for actual pops:(may be too many); alternatively a random pct of actuals, or the density of actuals
         times = self.simulation_run_results[0].get('populations').index
@@ -472,9 +474,88 @@ class CaseValidator(object):
             return "Wrote: {}".format(plot_file)
 
 
+class ValidationResultType(Enum):
+    """ Types of validation results """
+    CASE_UNREADABLE = 'could not read case'
+    FAILED_VALIDATION_RUN = 'validation run failed'
+    SLOW_VALIDATION_RUN = 'validation run timed out'
+    CASE_DID_NOT_VALIDATE = 'case did not validate'
+    CASE_VALIDATED = 'case validated'
+
+
+ValidationRunResult = namedtuple('ValidationRunResult', 'cases_dir, case_type_sub_dir, case_num, result_type, error')
+# make dynamic_expression optional: see https://stackoverflow.com/a/18348004
+ValidationRunResult.__new__.__defaults__ = (None, )
+# todo: add doc strings, like
+# ValidationRunResult.__doc__ += ': directory storing all test cases'
+
 class ValidationSuite(object):
-    """ Run suite of validation tests of `wc_sim`'s dynamic behavior """
-    pass
+    """Run suite of validation tests of `wc_sim`'s dynamic behavior """
+
+    def __init__(self, cases_dir, plot_dir=None):
+        if not os.path.isdir(cases_dir):
+            raise ValidationError("cannot open cases_dir: '{}'".format(cases_dir))
+        self.cases_dir = cases_dir
+        if plot_dir and not os.path.isdir(plot_dir):
+            raise ValidationError("cannot open plot_dir: '{}'".format(plot_dir))
+        self.plot_dir = plot_dir
+        self.results = []
+
+    def _record_result(self, case_type_sub_dir, case_num, result_type, error=None):
+        """Record a result_type
+        """
+        # todo: if an error occurs record more, like the results dir
+        if type(result_type) != ValidationResultType:
+            raise ValidationError("result_type must be a ValidationResultType, not a '{}'".format(type(result_type).__name__))
+        if error:
+            self.results.append(ValidationRunResult(self.cases_dir, case_type_sub_dir, case_num, result_type, error))
+        else:
+            self.results.append(ValidationRunResult(self.cases_dir, case_type_sub_dir, case_num, result_type))
+
+    def _run_test(self, case_type_name, case_num, num_stochastic_runs=None):
+        """Run one test case and report the result
+        """
+        try:
+            case_validator = CaseValidator(self.cases_dir, case_type_name, case_num)
+        except Exception as e:
+            self._record_result(case_type_name, case_num, ValidationResultType.CASE_UNREADABLE, str(e))
+            return
+        try:
+            kwargs = {}
+            if self.plot_dir:
+                plot_file = os.path.join(self.plot_dir, "{}_{}_validation_test.pdf".format(case_type_name, case_num))
+                kwargs['plot_file'] = plot_file
+            if num_stochastic_runs:
+                kwargs['num_discrete_stochastic_runs'] = num_stochastic_runs
+            # todo: timeout excessively long validation runs
+            validation_result = case_validator.validate_model(**kwargs)
+        except Exception as e:
+            self._record_result(case_type_name, case_num, ValidationResultType.FAILED_VALIDATION_RUN, str(e))
+            return
+        if validation_result:
+            self._record_result(case_type_name, case_num, ValidationResultType.CASE_DID_NOT_VALIDATE, validation_result)
+        else:
+            self._record_result(case_type_name, case_num, ValidationResultType.CASE_VALIDATED)
+
+    def run(self, test_case_type_name=None, cases=None, num_stochastic_runs=None):
+        """Run all requested test cases
+        """
+        if isinstance(cases, str):
+            raise ValidationError("cases should be an iterator over case nums, not a string")
+        if cases and not test_case_type_name:
+            raise ValidationError('if cases provided then test_case_type_name must be provided too')
+        if test_case_type_name:
+            if test_case_type_name not in ValidationTestCaseType.__members__:
+                raise ValidationError("Unknown ValidationTestCaseType: '{}'".format(test_case_type_name))
+            if cases is None:
+                cases = os.listdir(os.path.join(self.cases_dir, TEST_CASE_TYPE_TO_DIR[test_case_type_name]))
+            for case_num in cases:
+                self._run_test(test_case_type_name, case_num, num_stochastic_runs=num_stochastic_runs)
+        else:
+            for validation_test_case_type in ValidationTestCaseType:
+                for case_num in os.listdir(os.path.join(self.cases_dir, TEST_CASE_TYPE_TO_DIR[validation_test_case_type.name])):
+                    self._run_test(validation_test_case_type.name, case_num, num_stochastic_runs=num_stochastic_runs)
+        return self.results
 
 
 class ValidationUtilities(object):
