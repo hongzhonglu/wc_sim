@@ -19,7 +19,7 @@ from obj_model import utils
 from wc_utils.util.enumerate import CaseInsensitiveEnum
 from wc_lang.io import Reader, Writer
 from wc_lang.core import (Model, Submodel,  SpeciesType, SpeciesTypeType, Species,
-                          Reaction, Observable, Compartment,
+                          Reaction, ReactionParticipantAttribute, Observable, Compartment,
                           SpeciesCoefficient, Parameter,
                           RateLaw, RateLawDirection, RateLawEquation, SubmodelAlgorithm, Concentration,
                           BiomassComponent, BiomassReaction, StopCondition, ConcentrationUnit,
@@ -254,6 +254,44 @@ class MakeModels(object):
             base_model.get_manager().insert_all_new()
 
         return model
+
+    @staticmethod
+    def model_to_str(model):
+        """ Get human readable model
+
+        Args:
+            model (:obj:`core.Model`): model
+
+        Returns:
+            :obj:`str`: human readable model
+        """
+        summary = ['\nModel Summary:']
+        summary.append("model {}: '{}'".format(model.id, model.name))
+        summary.append("compartments:")
+        for cmpt in model.get_compartments():
+            summary.append("\t{}: '{}', init. vol. = {}".format(cmpt.id, cmpt.name,
+                cmpt.initial_volume))
+        reaction_participant_attribute = ReactionParticipantAttribute()
+        summary.append("species types:")
+        for st in model.get_species_types():
+            summary.append("\t{}: MW: {}".format(st.id, st.molecular_weight))
+        summary.append("submodels:")
+        for sm in model.get_submodels():
+            summary.append("\t{}: in {}".format(sm.id, sm.compartment.id))
+            summary.append("reactions and rate laws:")
+            for rxn in sm.reactions:
+                summary.append("\t\t{}: {}, {}".format(rxn.id,
+                    reaction_participant_attribute.serialize(rxn.participants),
+                    rxn.rate_laws[0].equation.serialize()))
+        summary.append("species:")
+        for species in model.get_species():
+            summary.append("\t{}: initially {} ({})".format(species.get_id(),
+                # todo: convert units into molecules
+                species.concentration.value, ConcentrationUnit(species.concentration.units).name))
+        summary.append("parameters:")
+        for param in model.get_parameters():
+            summary.append("\t{}={} ({})".format(param.id, param.value, param.units))
+        return '\n'.join(summary)
 
 
 class ModelFromKB(object):
