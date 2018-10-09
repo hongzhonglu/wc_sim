@@ -18,6 +18,7 @@ import math
 from collections import namedtuple
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+import traceback
 
 from wc_lang.io import Reader
 from wc_lang.core import ReactionParticipantAttribute
@@ -432,7 +433,25 @@ class CaseValidator(object):
         # todo: use matplotlib 3; use the more flexible OO API instead of pyplot
         # todo: optional for actual pops:(may be too many); alternatively a random pct of actuals, or the density of actuals
         times = self.simulation_run_results[0].get('populations').index
+
+        num_species_types = len(self.validation_test_reader.settings['amount'])
+        if num_species_types == 1:
+            n_rows = 1
+            n_cols = 1
+        elif num_species_types == 2:
+            n_rows = 1
+            n_cols = 2
+        elif 2 < num_species_types <= 4:
+            n_rows = 2
+            n_cols = 2
+        else:
+            # todo: better handle situation of more than 4 plots
+            print('cannot plot more than 4 species_types')
+            return
+        plot_num = 1
         for species_type in self.validation_test_reader.settings['amount']:
+            plt.subplot(n_rows, n_cols, plot_num)
+            plot_num += 1
 
             # plot mean simulation pop
             model_mean, = plt.plot(times, self.results_comparator.simulation_pop_means[species_type], 'g-')
@@ -451,27 +470,28 @@ class CaseValidator(object):
             correct_mean_plus_3sd, = plt.plot(times, expected_mean_df.values + 3 * expected_sd_df, **kwargs)
             correct_mean_minus_3sd, = plt.plot(times, expected_mean_df.values - 3 * expected_sd_df, **kwargs)
 
-            plt.ylabel('population')
-            plt.xlabel('time (s)')
+            plt.ylabel('population', fontsize=9)
+            plt.xlabel('time (s)', fontsize=9)
             plt.legend((simul_pops, model_mean, correct_mean, correct_mean_plus_3sd),
                 ('{} simul runs'.format(species_type), '{} simul mean'.format(species_type), 'correct mean',
                     '3 sd from correct mean'),
-                loc='lower left', fontsize=10)
-            axes = plt.gca()
-            summary = self.get_model_summary()
-            middle = len(summary)//2
-            x_pos = 0
-            y_pos = 1.02
-            for lb, ub in [(0, middle), (middle, len(summary))]:
-                text = plt.text(x_pos, y_pos, '\n'.join(summary[lb:ub]), fontsize=4, transform=axes.transAxes)
-                # todo: position text automatically
-                x_pos += 0.4
-            test_case_summary = self.get_test_case_summary()
-            plt.text(0.8, y_pos, '\n'.join(test_case_summary), fontsize=4, transform=axes.transAxes)
-            fig = plt.gcf()
-            fig.savefig(plot_file)
-            plt.close(fig)
-            return "Wrote: {}".format(plot_file)
+                loc='lower left', fontsize=7)
+
+        summary = self.get_model_summary()
+        middle = len(summary)//2
+        x_pos = 0.1
+        y_pos = 0.9
+        for lb, ub in [(0, middle), (middle, len(summary))]:
+            text = plt.figtext(x_pos, y_pos, '\n'.join(summary[lb:ub]), fontsize=5)
+            # todo: position text automatically
+            x_pos += 0.35
+        test_case_summary = self.get_test_case_summary()
+        plt.figtext(0.8, y_pos, '\n'.join(test_case_summary), fontsize=5)
+
+        fig = plt.gcf()
+        fig.savefig(plot_file)
+        plt.close(fig)
+        return "Wrote: {}".format(plot_file)
 
 
 class ValidationResultType(Enum):
@@ -517,8 +537,9 @@ class ValidationSuite(object):
         """
         try:
             case_validator = CaseValidator(self.cases_dir, case_type_name, case_num)
-        except Exception as e:
-            self._record_result(case_type_name, case_num, ValidationResultType.CASE_UNREADABLE, str(e))
+        except:
+            tb = traceback.format_exc(limit=5)
+            self._record_result(case_type_name, case_num, ValidationResultType.CASE_UNREADABLE, tb)
             return
         try:
             kwargs = {}
@@ -529,8 +550,9 @@ class ValidationSuite(object):
                 kwargs['num_discrete_stochastic_runs'] = num_stochastic_runs
             # todo: timeout excessively long validation runs
             validation_result = case_validator.validate_model(**kwargs)
-        except Exception as e:
-            self._record_result(case_type_name, case_num, ValidationResultType.FAILED_VALIDATION_RUN, str(e))
+        except:
+            tb = traceback.format_exc(limit=5)
+            self._record_result(case_type_name, case_num, ValidationResultType.FAILED_VALIDATION_RUN, tb)
             return
         if validation_result:
             self._record_result(case_type_name, case_num, ValidationResultType.CASE_DID_NOT_VALIDATE, validation_result)

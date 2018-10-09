@@ -444,9 +444,25 @@ class RunValidationSuite(unittest.TestCase):
             ('00030', '003-01', (1, 2)),
             ('00037', '004-01', (0, 1))
         ]
+        root_test_dir = os.path.join(os.path.dirname(__file__), 'fixtures', 'validation', 'cases')
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+        self.plot_dir = os.path.join(os.path.dirname(__file__), 'tmp', 'validation', timestamp)
+        os.makedirs(self.plot_dir)
+        self.validation_suite = ValidationSuite(root_test_dir, self.plot_dir)
 
     def test_validation(self):
-        pass
+        cases = [test_case[0] for test_case in self.test_cases]
+        # cases = ['00030']
+        results = self.validation_suite.run('DISCRETE_STOCHASTIC', cases, num_stochastic_runs=50)
+        orders_validated = set()
+        for r, case in zip(results, self.test_cases):
+            print(r.case_num, r.result_type.name, end="")
+            if r.error:
+                print(' ', r.error, end="")
+            print()
+            if r.result_type == ValidationResultType.CASE_VALIDATED:
+                orders_validated.update(case[2])
+        print('orders_validated', orders_validated)
 
 
 class TestValidationUtilities(unittest.TestCase):
