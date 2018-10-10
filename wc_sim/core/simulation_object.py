@@ -129,7 +129,7 @@ class EventQueue(object):
         return next_event.receiving_object
 
     def next_events(self):
-        """ Get all events at the smallest event time destined for the object whose name sorts earliest
+        """ Get and remove all events at the smallest event time destined for the object whose name sorts earliest
 
         Because multiple events may occur concurrently -- that is, have the same simulation time --
         they must be provided as a collection to the simulation object that executes them.

@@ -1,4 +1,4 @@
-""" A generic dynamic submodel; a multi-algorithmic model is constructed of multiple dynamic submodel subclasses
+""" A generic dynamic submodel; a multi-algorithmic model is constructed from multiple dynamic submodel subclasses
 
 :Author: Arthur Goldberg, Arthur.Goldberg@mssm.edu
 :Author: Jonathan Karr, karr@mssm.edu
@@ -18,15 +18,11 @@ from wc_sim.multialgorithm.utils import get_species_and_compartment_from_name
 from wc_sim.multialgorithm.debug_logs import logs as debug_logs
 from wc_sim.multialgorithm import message_types, distributed_properties
 from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError, SpeciesPopulationError
+from wc_sim.multialgorithm.dynamic_expressions import DynamicRateLaw, DynamicReaction
 
-# TODO(Arthur): reactions -> dynamic reactions
-# TODO(Arthur): species -> dynamic species, or morph into species populations species
-# TODO(Arthur): this dynamic submodel's parameters -> dynamic parameters
-# TODO(Arthur): add logging/debugging to dynamic reactions, dynamic species, etc.
-# TODO(Arthur): use lists instead of sets for reproducibility
 
 class DynamicSubmodel(ApplicationSimulationObject):
-    """ Provide eneric dynamic submodel functionality
+    """ Provide generic dynamic submodel functionality
 
     Subclasses of `DynamicSubmodel` are combined into a multi-algorithmic model.
 
@@ -34,13 +30,16 @@ class DynamicSubmodel(ApplicationSimulationObject):
         id (:obj:`str`): unique id of this dynamic submodel / simulation object
         dynamic_model (:obj: `DynamicModel`): the aggregate state of a simulation
         reactions (:obj:`list` of `Reaction`): the reactions modeled by this dynamic submodel
+        dynamic_reactions (:obj:`list` of `DynamicReaction`): the dynamic reactions modeled by this
+            dynamic submodel: created during initializatino
         rates (:obj:`np.array`): array to hold reaction rates
         species (:obj:`list` of `Species`): the species that participate in the reactions modeled
-            by this dynamic submodel, with their initial concentrations
+            by this dynamic submodel
         parameters (:obj:`list` of `Parameter`): the model's parameters
-        dynamic_compartments (:obj:`list` of `DynamicCompartment`): the dynamic compartments containing
-            species that participate in reactions that this dynamic submodel models, including adjacent
-            compartments used by its transfer reactions
+        parameter_values (:obj:`dict` mapping `str` id to `float`): the values of all parameters
+        dynamic_compartments (:obj:`dict` mapping `str` id to `DynamicCompartment`): the dynamic
+            compartments containing species that participate in reactions that this dynamic submodel models,
+            including adjacent compartments used by its transfer reactions
         local_species_population (:obj:`LocalSpeciesPopulation`): the store that maintains this
             dynamic submodel's species population
         logger (:obj:`logging.Logger`): debug logger
@@ -51,8 +50,6 @@ class DynamicSubmodel(ApplicationSimulationObject):
         super().__init__(id)
         self.id = id
         self.dynamic_model = dynamic_model
-        self.reactions = reactions
-        self.rates = np.full(len(self.reactions), np.nan)
         self.log_with_time("submodel: {}; reactions: {}".format(self.id,
             [reaction.id for reaction in reactions]))
         self.species = species
@@ -60,8 +57,27 @@ class DynamicSubmodel(ApplicationSimulationObject):
         self.dynamic_compartments = dynamic_compartments
         self.local_species_population = local_species_population
         self.logger = debug_logs.get_log('wc.debug.file')
+        self.reactions = reactions
+        self.dynamic_reactions = []
+        for rxn in self.reactions:
+            self.dynamic_reactions.append(DynamicReaction(dynamic_model, local_species_population, rxn))
+        self.initialize_optimizations()
 
-    # The next 3 methods implement the abstract methods in ApplicationSimulationObject
+    def initialize_optimizations(self):
+        """ Initialize the data needed to optimize a submodel's calculations
+        """
+        # optimization: preallocate rates vector
+        self.rates = np.full(len(self.dynamic_reactions), np.nan)
+        # optimization: precompute parameter_values
+        self.parameter_values = {param.id: param.value for param in self.parameters}
+        # optimization: preallocate compartment volumes dictionary
+        self.volumes = {}
+        # optimization: precompute species ids
+        self.species_ids = [s.id() for s in self.species]
+        # optimization: precompute set of species ids
+        self.set_species_ids = set(self.species_ids)
+
+    # The next 2 methods implement the abstract methods in ApplicationSimulationObject
     def send_initial_events(self):
         pass    # pragma: no cover
 
@@ -82,19 +98,42 @@ class DynamicSubmodel(ApplicationSimulationObject):
         Returns:
             :obj:`list`: ids of species used by this dynamic submodel
         """
-        return [s.id() for s in self.species]
+        return self.species_ids
 
     def get_specie_counts(self):
-        """ Get a dictionary of current species counts for this dynamic submodel
+        """ Get the current species counts for species used by this dynamic submodel
 
         Returns:
             :obj:`dict`: a map: species_id -> current copy number
         """
-        species_ids = set(self.get_species_ids())
-        return self.local_species_population.read(self.time, species_ids)
+        return self.local_species_population.read(self.time, self.set_species_ids)
 
+    def compute_volumes(self):
+        """ Compute the volumes of the dynamic compartments that contain species used by reactions in this submodel
+
+        Volumes are stored in `self.volumes`, a `dict` that maps compartment_id -> volume, for each compartment
+
+        Returns:
+            :obj:`None`:
+        """
+        for id, dynamic_compartment in self.dynamic_compartments.items():
+            self.volumes[id] = dynamic_compartment.volume()
+
+    '''
+    harden and optimize:
+    harden:
+        if a compartment has counts > 0 but mass is 0 because some MWs == 0 -> raise exception
+        more convenient:
+            prohibit species with mw == 0, compartments with initial density that's undefined or 0
+    optimize:
+        pre-compute and cache volumes of all compartments occupied by species in this submodel
+            (actually, just volumes of species used by rate laws)
+        pre-compute mappings: species_id -> dynamic compartment;
+        pre-allocate a dict species_id -> concentration
+        make static simulator-wide mapping of species to array index, and use for all species references
+    '''
     def get_specie_concentrations(self):
-        """ Get the current species concentrations for this dynamic submodel
+        """ Get the current concentrations of species used by this dynamic submodel
 
         Concentrations are obtained from species counts.
         concentration ~ count/volume
@@ -109,6 +148,11 @@ class DynamicSubmodel(ApplicationSimulationObject):
                 or if the compartments volume is 0
         """
         counts = self.get_specie_counts()
+        # if all counts are 0, concentrations are too
+        if 0 == sum(counts.values()):
+            return {specie_id:0.0 for specie_id in self.get_species_ids()}
+
+        self.compute_volumes()
         concentrations = {}
         for specie_id in self.get_species_ids():
             (_, compartment_id) = get_species_and_compartment_from_name(specie_id)
@@ -116,11 +160,12 @@ class DynamicSubmodel(ApplicationSimulationObject):
                 raise MultialgorithmError("dynamic submodel '{}' lacks dynamic compartment '{}' for specie '{}'".format(
                     self.id, compartment_id, specie_id))
             dynamic_compartment = self.dynamic_compartments[compartment_id]
-            if dynamic_compartment.volume() == 0:
+            # todo: optimize: convert to assert that's compiled out at run-time
+            if self.volumes[compartment_id] == 0:
                 raise MultialgorithmError("dynamic submodel '{}' cannot compute concentration in "
                     "compartment '{}' with volume=0".format(self.id, compartment_id))
 
-            concentrations[specie_id] = counts[specie_id]/(dynamic_compartment.volume()*Avogadro)
+            concentrations[specie_id] = counts[specie_id]/(self.volumes[compartment_id]*Avogadro)
         return concentrations
 
     def get_parameter_values(self):
@@ -129,10 +174,7 @@ class DynamicSubmodel(ApplicationSimulationObject):
         Returns:
             :obj:`dict`: a map: parameter_id -> parameter value
         """
-        vals = {}
-        for param in self.parameters:
-            vals[param.id] = param.value
-        return vals
+        return self.parameter_values
 
     def get_num_submodels(self):
         """ Provide the number of submodels
@@ -142,6 +184,22 @@ class DynamicSubmodel(ApplicationSimulationObject):
         """
         return self.dynamic_model.get_num_submodels()
 
+    '''
+    harden and optimize:
+    harden:
+        can we straightforwardly model a MM rate in a SSA submodel?
+    optimize:
+        pre-categorize reactions & rate laws into these types, and only calculate concentrations which are needed
+            reactions without rate laws: needs nothing
+            mass action: needs volume (except for reactions of order 1)
+            MM and other: needs concentrations which needs volume
+        pre-compute compartment volume(s) and pass to dynamic_rate_law.eval()
+        compute rates only as necessary: just for rate laws whose dynamic expressions have changed
+            statically, construct dependencies among dynamic expressions, with species counts as the leaves
+                make static map from each species to the rate laws that depend on it
+            at each rates calculation, form union of rate laws that depend on all changed species counts
+            compute those rate laws
+    '''
     def calc_reaction_rates(self):
         """ Calculate the rates for this dynamic submodel's reactions
 
@@ -153,17 +211,16 @@ class DynamicSubmodel(ApplicationSimulationObject):
         Returns:
             :obj:`np.ndarray`: a numpy array of reaction rates, indexed by reaction index
         """
-        # TODO(Arthur): optimization: get concentrations only for modifiers in the reactions
         species_concentrations = self.get_specie_concentrations()
-        for idx_reaction, rxn in enumerate(self.reactions):            
-            if rxn.rate_laws:
-                parameter_values = {param.id: param.value for param in rxn.rate_laws[0].equation.parameters}
-                self.rates[idx_reaction] = RateLawUtils.eval_rate_law(rxn.rate_laws[0], species_concentrations, parameter_values)
+        for idx_reaction, dynamic_rxn in enumerate(self.dynamic_reactions):
+            if hasattr(dynamic_rxn, 'dynamic_rate_law'):
+                self.rates[idx_reaction] = dynamic_rxn.dynamic_rate_law.eval(self.time, self.get_parameter_values(),
+                    species_concentrations)
         # TODO(Arthur): optimization: get this if to work:
         # if self.logger.isEnabledFor(self.logger.getEffectiveLevel()):
         # print('self.logger.getEffectiveLevel())', self.logger.getEffectiveLevel())
-        msg = str([(self.reactions[i].id, self.rates[i]) for i in range(len(self.reactions))])
-        debug_logs.get_log('wc.debug.file').debug(msg, sim_time=self.time)
+        # msg = str([(self.dynamic_reactions[i].id, self.rates[i]) for i in range(len(self.dynamic_reactions))])
+        # debug_logs.get_log('wc.debug.file').debug(msg, sim_time=self.time)
         return self.rates
 
     # These methods - enabled_reaction, identify_enabled_reactions, execute_reaction - are used

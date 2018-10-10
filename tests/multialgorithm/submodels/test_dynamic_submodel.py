@@ -12,7 +12,7 @@ import warnings
 from scipy.constants import Avogadro
 
 from wc_lang.io import Reader
-from wc_lang.core import Reaction, SpeciesType, Species, Model
+from wc_lang.core import Reaction, SpeciesType, Species, Model, CompartmentType
 from wc_lang.prepare import PrepareModel, CheckModel
 from wc_lang.transform import SplitReversibleReactionsTransform
 from wc_sim.core.simulation_object import SimulationObject
@@ -27,15 +27,16 @@ from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 from wc_sim.multialgorithm.submodels.skeleton_submodel import SkeletonSubmodel
 from wc_sim.multialgorithm.model_utilities import ModelUtilities
 from obj_model.utils import get_component_by_id
+from wc_sim.multialgorithm.dynamic_components import DynamicCompartment
 
 def prepare_model(model):
     SplitReversibleReactionsTransform().run(model)
-    # TODO:(Arthur): put these in a high-level prepare
     PrepareModel(model).run()
     CheckModel(model).run()
 
 def make_dynamic_submodel_params(model, lang_submodel):
-    multialgorithm_simulation = MultialgorithmSimulation(model, None)
+    multialgorithm_simulation = MultialgorithmSimulation(model, {})
+    multialgorithm_simulation.build_simulation()
 
     return (lang_submodel.id,
             multialgorithm_simulation.dynamic_model,
@@ -56,47 +57,48 @@ class TestDynamicSubmodel(unittest.TestCase):
         self.model = Reader().run(self.MODEL_FILENAME, strict=False)
         prepare_model(self.model)
         self.dynamic_submodels = {}
-        self.misconfigured_dynamic_submodels = {}
         for lang_submodel in self.model.get_submodels():
             self.dynamic_submodels[lang_submodel.id] = DynamicSubmodel(
                 *make_dynamic_submodel_params(self.model, lang_submodel))
 
-            # create dynamic submodels that lack a dynamic compartment
-            (id, dynamic_model, reactions, species, parameters, dynamic_compartments, local_species_pop) = \
-                make_dynamic_submodel_params(self.model, lang_submodel)
-            dynamic_compartments.popitem()
-            self.misconfigured_dynamic_submodels[lang_submodel.id] = DynamicSubmodel(
-                id, None, reactions, species, parameters, dynamic_compartments, local_species_pop)
+        self.species_map = {}
+        for species in self.model.get_species():
+            self.species_map[species.id()] = species
+
+    def make_dynamic_submodel_in_abstract_compt(self):
+        # make model with submodel in abstract compartment
+        model = MakeModels().make_test_model('1 species, 1 reaction')
+        submodel_1 = model.submodels.get_one(id='submodel_1')
+        submodel_1.compartment.type = CompartmentType.abstract
 
     def test_get_state(self):
         for dynamic_submodel in self.dynamic_submodels.values():
             self.assertEqual(dynamic_submodel.get_state(), DynamicSubmodel.GET_STATE_METHOD_MESSAGE)
 
     def expected_molar_conc(self, dynamic_submodel, specie_id):
-        species = list(filter(lambda s: s.id() == specie_id, dynamic_submodel.species))[0]
+        species = self.species_map[specie_id]
         copy_num = ModelUtilities.concentration_to_molecules(species)
         return copy_num / (species.compartment.initial_volume * Avogadro)
 
     def test_get_specie_concentrations(self):
         for dynamic_submodel in self.dynamic_submodels.values():
-            for specie_id,value in dynamic_submodel.get_specie_concentrations().items():
+            for specie_id, value in dynamic_submodel.get_specie_concentrations().items():
                 self.assertEqual(self.expected_molar_conc(dynamic_submodel, specie_id), value)
 
-        for dynamic_submodel in self.misconfigured_dynamic_submodels.values():
-            with self.assertRaises(MultialgorithmError) as context:
-                dynamic_submodel.get_specie_concentrations()
-            self.assertRegex(str(context.exception),
-                "dynamic submodel .* lacks dynamic compartment .* for specie .*")
-
-        # test volume=0 exception; must create model with 0<mass and then decrease counts
+        # test 0 == sum(counts.values()); must create model with 0<mass and then decrease counts
         model = MakeModels().make_test_model('1 species, 1 reaction',
             specie_copy_numbers={'spec_type_0[compt_1]': 1})
         dynamic_submodel = DynamicSubmodel(*make_dynamic_submodel_params(model, model.submodels[0]))
         dynamic_submodel.local_species_population.adjust_discretely(0, {'spec_type_0[compt_1]': -1})
-        with self.assertRaises(MultialgorithmError) as context:
-            dynamic_submodel.get_specie_concentrations()
-        self.assertRegex(str(context.exception),
-            "dynamic submodel .* cannot compute concentration in compartment .* with volume=0")
+        self.assertEqual(dynamic_submodel.get_specie_concentrations(), {'spec_type_0[compt_1]': 0.0})
+
+    def test_get_specie_concentrations_exception(self):
+        for dynamic_submodel in self.dynamic_submodels.values():
+            if dynamic_submodel.dynamic_compartments:
+                dynamic_submodel.dynamic_compartments.popitem()
+                with self.assertRaisesRegexp(MultialgorithmError,
+                    "dynamic submodel .* lacks dynamic compartment .* for specie .*"):
+                    dynamic_submodel.get_specie_concentrations()
 
     def test_calc_reaction_rates(self):
         expected_rates = {'reaction_2': 0.0, 'reaction_4': 2.0}
@@ -109,6 +111,7 @@ class TestDynamicSubmodel(unittest.TestCase):
     expected_enabled = {
         'submodel_1': set(['reaction_1', 'reaction_2', '__exchange_reaction__1', '__exchange_reaction__2']),
         'submodel_2': set(['reaction_4', 'reaction_3_forward', 'reaction_3_backward']),
+        'submodel_3': set()
     }
     def test_enabled_reaction(self):
         for dynamic_submodel in self.dynamic_submodels.values():
@@ -136,10 +139,9 @@ class TestDynamicSubmodel(unittest.TestCase):
         for dynamic_submodel in self.dynamic_submodels.values():
             for reaction in dynamic_submodel.reactions:
                 if reaction not in enabled_reactions:
-                    with self.assertRaises(MultialgorithmError) as context:
+                    with self.assertRaisesRegexp(MultialgorithmError,
+                        "dynamic submodel .* cannot execute reaction"):
                         dynamic_submodel.execute_reaction(reaction)
-                    self.assertRegex(str(context.exception),
-                        "dynamic submodel .* cannot execute reaction")
 
     def do_test_execute_reaction(self, reaction_id, expected_adjustments):
         rxn = self.model.get_component('reaction', reaction_id)

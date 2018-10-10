@@ -17,7 +17,19 @@ class Error(Exception):
 
 
 class MultialgorithmError(Error):
-    """ Exception raised for errors in wc_sim.multialgorithm
+    """ Exception raised for errors in `wc_sim.multialgorithm`
+
+    Attributes:
+        message (:obj:`str`): the exception's message
+    """
+    def __init__(self, message=None):
+        super().__init__(message)
+
+
+class FrozenSimulationError(MultialgorithmError):
+    """ Exception raised by an SSA submodel when it is the only submodel and total propensities == 0
+
+    A simulation that is in this state cannot progress.
 
     Attributes:
         message (:obj:`str`): the exception's message

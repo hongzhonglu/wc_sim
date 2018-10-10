@@ -691,11 +691,15 @@ class DynamicReaction(DynamicComponent):
         super().__init__(dynamic_model, local_species_population, reaction)
 
         # prepare this reaction's rate law
-        if dynamic_model is not None and hasattr(reaction, 'rate_laws') and len(reaction.rate_laws):
-            compartment = reaction.submodel.compartment
-            dynamic_compartment = dynamic_model.dynamic_compartments[compartment.id]
-            self.dynamic_rate_law = DynamicRateLaw(dynamic_model, local_species_population, dynamic_compartment,
-                reaction.rate_laws[0])
+        if hasattr(reaction, 'rate_laws') and len(reaction.rate_laws):
+            if dynamic_model is not None:
+                compartment = reaction.submodel.compartment
+                dynamic_compartment = dynamic_model.dynamic_compartments[compartment.id]
+                self.dynamic_rate_law = DynamicRateLaw(dynamic_model, local_species_population, dynamic_compartment,
+                    reaction.rate_laws[0])
+            else:
+                raise MultialgorithmError("DynamicReaction() '{}' needs initialized dynamic_model to "
+                    "create its DynamicRateLaw".format(self.id))
 
     def __str__(self):
         """ Provide a readable representation of this `DynamicReaction`

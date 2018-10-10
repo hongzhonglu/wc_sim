@@ -20,7 +20,7 @@ from wc_sim.core.event import Event
 from wc_sim.multialgorithm import message_types
 from wc_sim.multialgorithm.config import core as config_core_multialgorithm
 from wc_sim.multialgorithm.submodels.dynamic_submodel import DynamicSubmodel
-from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
+from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError, FrozenSimulationError
 
 config_core = config_core_core.get_config()['wc_sim']['core']
 config_multialgorithm = \
@@ -122,11 +122,11 @@ class SSASubmodel(DynamicSubmodel):
         self.num_SsaWaits=0
         # The 'initial_ssa_wait_ema' must be positive, as otherwise an infinite sequence of SsaWait
         # messages will be executed at the start of a simulation if no reactions are enabled
-        if default_center_of_mass is None:
-            default_center_of_mass = config_core['default_center_of_mass']
         if config_multialgorithm['initial_ssa_wait_ema'] <= 0:
             raise MultialgorithmError("'initial_ssa_wait_ema' must be positive to avoid infinite sequence of "
             "SsaWait messages, but it is {}".format(config_multialgorithm['initial_ssa_wait_ema']))
+        if default_center_of_mass is None:
+            default_center_of_mass = config_core['default_center_of_mass']
         self.ema_of_inter_event_time = ExponentialMovingAverage(
             config_multialgorithm['initial_ssa_wait_ema'],
             center_of_mass=default_center_of_mass)
@@ -158,8 +158,6 @@ class SSASubmodel(DynamicSubmodel):
         """
 
         # TODO(Arthur): optimization: only calculate new reaction rates only for species whose counts have changed
-        # propensities can be proportional because only relative values are considered
-        # thus, they don't need to be multiplied by volume * Avogadro
         proportional_propensities = np.maximum(0, self.calc_reaction_rates())
         self.log_with_time("submodel: {}; proportional_propensities: {}".format(self.id, proportional_propensities))
 
@@ -169,8 +167,25 @@ class SSASubmodel(DynamicSubmodel):
         total_proportional_propensities = np.sum(proportional_propensities)
         assert not math.isnan(total_proportional_propensities), "total propensities is 'NaN'"   # pragma, no cover
         if total_proportional_propensities == 0 and self.get_num_submodels() == 1:
-            raise MultialgorithmError("A simulation with 1 SSA submodel and total propensities = 0 cannot progress")
+            raise FrozenSimulationError("Simulation of 1 SSA submodel ({}) with total propensities = 0 cannot progress".format(
+                self.id))
         return (proportional_propensities, total_proportional_propensities)
+
+    def get_reaction_propensities(self):
+        """ Get reaction propensities and handle boundary conditions
+        """
+        try:
+            propensities, total_propensities = self.determine_reaction_propensities()
+        except FrozenSimulationError:
+            # schedule event for time = infinity so that other activities like checkpointing continue
+            # for the remainder of the simulation
+            self.send_event(float('inf'), self, message_types.SsaWait())
+            return (None, None)
+
+        if total_propensities == 0:
+            self.schedule_SsaWait()
+
+        return (propensities, total_propensities)
 
     def schedule_SsaWait(self):
         """ Schedule an SsaWait.
@@ -179,7 +194,7 @@ class SSASubmodel(DynamicSubmodel):
         self.num_SsaWaits += 1
         # TODO(Arthur): avoid arbitrarily slow progress which arises when 1) no reactions
         # are enabled & 2) EMA of the time between ExecuteSsaReaction events is arbitrarily small
-        # Solution(s): a) if sequence of SsaWait occurs, increase EMA delay, or b) terminate
+        # Solution: a) if sequence of SsaWait occurs, increase EMA delay
 
     def schedule_ExecuteSsaReaction(self, dt, reaction_index):
         """ Schedule an ExecuteSsaReaction.
@@ -208,10 +223,8 @@ class SSASubmodel(DynamicSubmodel):
         Returns:
             :obj:`float`: the delay until the next SSA reaction, or `None` if no reaction is scheduled
         """
-        (propensities, total_propensities) = self.determine_reaction_propensities()
-
-        if total_propensities == 0:
-            self.schedule_SsaWait()
+        propensities, total_propensities = self.get_reaction_propensities()
+        if total_propensities is None or total_propensities == 0:
             return
 
         # Select time to next reaction from exponential distribution
@@ -288,10 +301,9 @@ class SSASubmodel(DynamicSubmodel):
             self.execute_SSA_reaction(reaction_index)
 
         else:
-            (propensities, total_propensities) = self.determine_reaction_propensities()
-            if total_propensities == 0:
+            propensities, total_propensities = self.get_reaction_propensities()
+            if total_propensities is None or total_propensities == 0:
                 self.log_with_time("submodel: {}: no reaction to execute".format(self.id))
-                self.schedule_SsaWait()
                 return
 
             else:
