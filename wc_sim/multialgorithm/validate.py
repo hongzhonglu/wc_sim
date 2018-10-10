@@ -416,6 +416,7 @@ class CaseValidator(object):
     def get_test_case_summary(self):
         """Summarize the test case
         """
+        # todo: include # events, run time, perhaps details on error of failed tests
         summary = ['Test Case Summary']
         if self.comparison_result:
             summary.append("Failing species types: {}".format(', '.join(self.comparison_result)))
@@ -538,7 +539,7 @@ class ValidationSuite(object):
         try:
             case_validator = CaseValidator(self.cases_dir, case_type_name, case_num)
         except:
-            tb = traceback.format_exc(limit=5)
+            tb = traceback.format_exc()
             self._record_result(case_type_name, case_num, ValidationResultType.CASE_UNREADABLE, tb)
             return
         try:
@@ -551,7 +552,7 @@ class ValidationSuite(object):
             # todo: timeout excessively long validation runs
             validation_result = case_validator.validate_model(**kwargs)
         except:
-            tb = traceback.format_exc(limit=5)
+            tb = traceback.format_exc()
             self._record_result(case_type_name, case_num, ValidationResultType.FAILED_VALIDATION_RUN, tb)
             return
         if validation_result:
