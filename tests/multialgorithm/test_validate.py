@@ -451,8 +451,9 @@ class RunValidationSuite(unittest.TestCase):
         self.validation_suite = ValidationSuite(root_test_dir, self.plot_dir)
 
     def test_validation(self):
+        # todo: move to validation main program
         cases = [test_case[0] for test_case in self.test_cases]
-        results = self.validation_suite.run('DISCRETE_STOCHASTIC', cases, num_stochastic_runs=5)
+        results = self.validation_suite.run('DISCRETE_STOCHASTIC', cases, num_stochastic_runs=50)
         orders_validated = set()
         for r, case in zip(results, self.test_cases):
             print(r.case_num, r.result_type.name, end="")

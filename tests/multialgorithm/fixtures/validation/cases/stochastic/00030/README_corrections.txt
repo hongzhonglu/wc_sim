@@ -4,8 +4,8 @@ Test 00030 assumes constant but unknown volume, doesn't specify specie type mole
 
 Initial 00030 model
     Reactions:
-        Dimerization: 2P -> P2, k1 * P * (P - 1)) / 2
-        Disassociation: P2 -> 2P, k2 * P2
+        Dimerization: 2P -> P2, @k1 * P * (P - 1)) / 2
+        Disassociation: P2 -> 2P, @k2 * P2
 
     Initial amounts (molecules):
         Species type P = 100
