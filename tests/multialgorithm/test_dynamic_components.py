@@ -15,7 +15,7 @@ from itertools import chain
 
 from wc_lang.io import Reader
 from wc_lang.core import (Model, Submodel, Compartment, Reaction, SpeciesType, Species, SpeciesCoefficient,
-    Concentration, ConcentrationUnit, Observable, ExpressionMethods)
+    Concentration, ConcentrationUnit, Observable, ExpressionMethods, CompartmentType)
 from wc_sim.multialgorithm.species_populations import LocalSpeciesPopulation
 from wc_sim.multialgorithm.dynamic_components import DynamicModel, DynamicCompartment, DynamicCompartmentType
 from wc_sim.multialgorithm.multialgorithm_simulation import MultialgorithmSimulation
@@ -75,17 +75,18 @@ class TestDynamicCompartment(unittest.TestCase):
 
         # abstract DynamicCompartmentType, with bad initial_volume
         for init_volume in [float('nan'), -2, 0, 'x']:
-            bad_compartment = Compartment(id='id', name='name', initial_volume=init_volume)
+            bad_compartment = Compartment(id='id', name='name', initial_volume=init_volume,
+                type=CompartmentType.abstract)
             with self.assertRaisesRegexp(MultialgorithmError,
                 "in an abstract .* init_volume must be a positive real number.*is '{}'".format(init_volume)):
-                DynamicCompartment(bad_compartment, self.local_species_pop,
-                    compartment_type=DynamicCompartmentType.abstract)
+                DynamicCompartment(bad_compartment, self.local_species_pop)
 
         # invalid compartment_type
         invalid_compartment_type = 'foo'
-        with self.assertRaisesRegexp(AssertionError,
-            "invalid compartment_type: '{}'".format(invalid_compartment_type)):
-            DynamicCompartment(compartment, self.local_species_pop, compartment_type=invalid_compartment_type)
+        compartment.type = invalid_compartment_type
+        with self.assertRaisesRegexp(MultialgorithmError,
+            "unknown compartment type '{}'".format(invalid_compartment_type)):
+            DynamicCompartment(compartment, self.local_species_pop)
 
     def test_biochemical_dynamic_compartment(self):
         dynamic_compartment = DynamicCompartment(self.compartment, self.local_species_pop)
@@ -105,7 +106,8 @@ class TestDynamicCompartment(unittest.TestCase):
         self.assertAlmostEqual(dynamic_compartment.density(), estimated_density)
 
         # self.compartment containing just the first element of self.species_ids
-        dynamic_compartment = DynamicCompartment(self.compartment, self.local_species_pop, self.species_ids[:1])
+        dynamic_compartment = DynamicCompartment(self.compartment, self.local_species_pop,
+            species_ids=self.species_ids[:1])
         estimated_mass = self.all_pops*self.all_m_weights/Avogadro
         self.assertAlmostEqual(dynamic_compartment.mass(), estimated_mass)
 
@@ -126,8 +128,8 @@ class TestDynamicCompartment(unittest.TestCase):
             self.assertIn("providing density when 0<self.mass() may cause unexpected behavior", str(w[-1].message))
 
     def test_abstract_dynamic_compartment(self):
-        dynamic_compartment = DynamicCompartment(self.compartment, self.local_species_pop,
-            compartment_type=DynamicCompartmentType.abstract)
+        self.compartment.type = CompartmentType.abstract
+        dynamic_compartment = DynamicCompartment(self.compartment, self.local_species_pop)
         self.assertFalse(hasattr(dynamic_compartment, 'constant_density'))
         self.assertTrue(dynamic_compartment.mass() is None)
         self.assertEqual(dynamic_compartment.volume(), self.compartment.initial_volume)
@@ -140,12 +142,14 @@ class TestDynamicCompartment(unittest.TestCase):
         # test str()
         self.assertIn(dynamic_compartment.id, str(dynamic_compartment))
         self.assertIn("Compartment type: abstract", str(dynamic_compartment))
+        self.assertIn("Constant volume (L):", str(dynamic_compartment))
 
 
 class TestDynamicModel(unittest.TestCase):
 
     MODEL_FILENAME = os.path.join(os.path.dirname(__file__), 'fixtures', 'test_model.xlsx')
     DRY_MODEL_FILENAME = os.path.join(os.path.dirname(__file__), 'fixtures', 'test_dry_model.xlsx')
+    MODEL_WITH_ABSTRACT_COMPT_FILENAME = os.path.join(os.path.dirname(__file__), 'fixtures', 'test_model_abstract_compt.xlsx')
 
     def read_model(self, model_filename):
         # read and initialize a model
@@ -193,6 +197,10 @@ class TestDynamicModel(unittest.TestCase):
         computed_aggregate_state = self.dynamic_model.get_aggregate_state()
         self.compare_aggregate_states(expected_aggregate_state, computed_aggregate_state)
 
+        # number submodels
+        self.assertEqual(self.dynamic_model.get_num_submodels(), 2)
+        self.assertEqual(self.dynamic_model.get_num_submodels(), len(self.model.get_submodels()))
+
     def test_dry_dynamic_model(self):
         self.read_model(self.DRY_MODEL_FILENAME)
         self.assertEqual(self.dynamic_model.fraction_dry_weight, 0)
@@ -211,6 +219,10 @@ class TestDynamicModel(unittest.TestCase):
                 'volume': 4.58E-17}}
         }
         self.compare_aggregate_states(expected_aggregate_state, computed_aggregate_state)
+
+    def test_dynamic_model_w_abstract_compartment(self):
+        self.read_model(self.MODEL_WITH_ABSTRACT_COMPT_FILENAME)
+        self.assertEqual(self.dynamic_model.cell_mass(), None)
 
     def test_eval_dynamic_observables(self):
         # make a Model

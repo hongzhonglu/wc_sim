@@ -15,6 +15,7 @@ class NextEvent(SimulationMessage):
     "Schedule the next event"
 
 
+# todo: unit test this; perhaps make it an ABC
 class TemplatePeriodicSimulationObject(ApplicationSimulationObject):
     """ Template self-clocking ApplicationSimulationObject
 

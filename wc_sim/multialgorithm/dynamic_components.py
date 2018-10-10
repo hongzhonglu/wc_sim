@@ -14,7 +14,7 @@ from enum import Enum
 import warnings
 
 from obj_model import utils
-from wc_lang.core import Species, SpeciesType, Compartment
+from wc_lang.core import Species, SpeciesType, Compartment, CompartmentType
 from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 from wc_sim.multialgorithm.species_populations import LocalSpeciesPopulation
 from wc_sim.multialgorithm.dynamic_expressions import (DynamicSpecies, DynamicFunction, DynamicStopCondition,
@@ -25,7 +25,7 @@ class DynamicCompartmentType(Enum):
     """ Types of dynamic compartments """
     # Represent physical biochemistry: species have mass, density is constant, volume=mass/density is always computable
     biochemical = 1
-    # Represent abstract species: constant volume and, perhaps, an unknown density
+    # Represent abstract species: constant volume and, perhaps, an unknown mass and density
     abstract = 2
 
 
@@ -49,8 +49,7 @@ class DynamicCompartment(object):
         constant_density (:obj:`float`): if `compartment_type` is `DynamicCompartmentType.biochemical`,
             the density of this compartment, which remains constant
     """
-    def __init__(self, compartment, species_population, species_ids=None,
-        compartment_type=DynamicCompartmentType.biochemical, density=None):
+    def __init__(self, compartment, species_population, species_ids=None, density=None):
         """ Initialize this `DynamicCompartment`
 
         Args:
@@ -59,16 +58,13 @@ class DynamicCompartment(object):
                 the populations of species in this `DynamicCompartment`
             species_ids (:obj:`list` of `str`, optional): the IDs of the species stored
                 in this compartment; defaults to the IDs of all species in `species_population`
-            compartment_type (:obj:`DynamicCompartmentType`): the type of dynamic compartment; defaults
-                to `DynamicCompartmentType.biochemical`; a `DynamicCompartmentType.biochemical`
-                compartment must be initialized with 0<density, provided either directly or via
-                `compartment.initial_volume` and mass
             density (:obj:`float`, optional): if provided, the density of this compartment, which
                 is assumed constant; not necessary if the volume and mass of the compartment are
                 both positive, or if `compartment_type` is `DynamicCompartmentType.abstract`
 
         Raises:
             :obj:`MultialgorithmError`:
+                if `compartment.type` is not a member of `wc_lang.core.CompartmentType`, an exception is raised
                 if `compartment_type` is `DynamicCompartmentType.biochemical`, an exception is raised
                     if a positive density cannot be computed from initial volume and mass, and `density`
                     is not provided, or the molecular weight of any species type in `species_population`
@@ -81,6 +77,14 @@ class DynamicCompartment(object):
         self.init_volume = compartment.initial_volume
         self.species_population = species_population
         self.species_ids = species_ids
+
+        if compartment.type == CompartmentType.biochemical:
+            compartment_type = DynamicCompartmentType.biochemical
+        elif compartment.type == CompartmentType.abstract:
+            compartment_type = DynamicCompartmentType.abstract
+        else:
+            raise MultialgorithmError("DynamicCompartment '{}': unknown compartment type '{}'".format(
+                self.name, compartment.type))
         self.compartment_type = compartment_type
 
         if compartment_type == DynamicCompartmentType.biochemical:
@@ -90,7 +94,7 @@ class DynamicCompartment(object):
                     "types must have positive molecular weights, but these species do not: '{}'".format(
                     self.name, compartment_type.name, species_population.invalid_weights()))
 
-            # compartment must be initialized with 0<density, provided either directly or via volume and mass
+            # a biochemical compartment must be initialized with 0<density, provided either directly or via volume and mass
             if density is None:
                 if not isinstance(self.init_volume, numbers.Real) or self.init_volume<=0 or math.isnan(self.init_volume):
                     raise MultialgorithmError("DynamicCompartment '{}': in a {} dynamic compartment init_volume "
@@ -116,7 +120,7 @@ class DynamicCompartment(object):
                     raise MultialgorithmError("DynamicCompartment '{}': in an {} dynamic compartment init_volume "
                         "must be a positive real number but it is '{}'".format(
                         self.name, compartment_type.name, self.init_volume))
-        else:
+        else:   # pragma: no cover
             assert False, "DynamicCompartment '{}': invalid compartment_type: '{}'".format(self.name, compartment_type)
 
     def mass(self):
@@ -173,13 +177,15 @@ class DynamicCompartment(object):
         values = []
         values.append("ID: " + self.id)
         values.append("Name: " + self.name)
-        values.append("Initial volume (L): {}".format(self.init_volume))
         values.append("Compartment type: {}".format(self.compartment_type.name))
         if self.compartment_type == DynamicCompartmentType.biochemical:
             values.append("Constant density (g/L): {}".format(self.constant_density))
             values.append("Current mass (g): {}".format(self.mass()))
+            values.append("Initial volume (L): {}".format(self.init_volume))
             values.append("Current volume (L): {}".format(self.volume()))
             values.append("Fold change volume: {}".format(self.volume()/self.init_volume))
+        if self.compartment_type == DynamicCompartmentType.abstract:
+            values.append("Constant volume (L): {}".format(self.volume()))
         return "DynamicCompartment:\n{}".format('\n'.join(values))
 
 # TODO(Arthur): define these in config data, which may come from wc_lang
@@ -198,7 +204,7 @@ class DynamicModel(object):
     Attributes:
         dynamic_compartments (:obj: `dict`): map from compartment ID to `DynamicCompartment`; the simulation's
             `DynamicCompartment`s, one for each compartment in `model`
-        cellular_dyn_compartments (:obj:`list`): list of the cellular compartments
+        cellular_dyn_compartments (:obj:`list`): list of `DynamicCompartment`s containe in the cell
         species_population (:obj:`LocalSpeciesPopulation`): an object that represents
             the populations of species in this `DynamicCompartment`
         dynamic_species (:obj:`dict` of `DynamicSpecies`): the simulation's dynamic species,
@@ -238,7 +244,7 @@ class DynamicModel(object):
         for dynamic_compartment in dynamic_compartments.values():
             if dynamic_compartment.id == EXTRACELLULAR_COMPARTMENT_ID:
                 continue
-            self.cellular_dyn_compartments.append( dynamic_compartment)
+            self.cellular_dyn_compartments.append(dynamic_compartment)
 
         # Does the model represent water?
         self.water_in_model = True
@@ -297,10 +303,15 @@ class DynamicModel(object):
         Assumes compartment volumes are in L and concentrations in mol/L.
 
         Returns:
-            :obj:`float`: the cell's mass (g)
+            :obj:`float` or `None`: the cell's mass (g), or `None` if no biochemical compartments exist
         """
         # TODO(Arthur): how should water be treated in mass calculations?
-        return sum([dynamic_compartment.mass() for dynamic_compartment in self.cellular_dyn_compartments])
+        masses = list(filter(None,
+            [dynamic_compartment.mass() for dynamic_compartment in self.cellular_dyn_compartments]))
+        if masses:
+            return sum(masses)
+        else:
+            return None
 
     def cell_volume(self):
         """ Compute the cell's volume
@@ -393,7 +404,6 @@ class DynamicModel(object):
             dynamic_stop_conditions = self.dynamic_stop_conditions.values()
             def stop_condition(time):
                 for dynamic_stop_condition in dynamic_stop_conditions:
-                    print('checking dynamic_stop_condition', dynamic_stop_condition)
                     if dynamic_stop_condition.eval(time):
                         return True
                 return False
