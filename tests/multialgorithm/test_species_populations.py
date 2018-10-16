@@ -104,7 +104,6 @@ class TestAccessSpeciesPopulations(unittest.TestCase):
             self.an_ASP.read_one(0, 'no_such_specie')
         self.assertEqual(str(cm.exception), "read_one: specie 'no_such_specie' not in the location map.")
 
-
     @unittest.skip("skip until MultialgorithmSimulation().initialize() is ready")
     def test_population_changes(self):
         """ Test population changes that occur without using event messages."""
@@ -225,9 +224,8 @@ class TestAccessSpeciesPopulations(unittest.TestCase):
 
 # TODO(Arthur): test multiple SpeciesPopSimObjects
 # TODO(Arthur): test adjust_continuously of remote_pop_stores
-# TODO(Arthur): evaluate coverage
 
-
+# TODO(Arthur): refactor this to make it much easier to read; correct answers should be very obvious
 class TestLocalSpeciesPopulation(unittest.TestCase):
 
     def setUp(self):
@@ -241,16 +239,16 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             for compartment_id in compartment_ids[:2]:
                 species_ids.append(wc_lang.core.Species.gen_id(species_type_id, compartment_id))
         self.init_populations = dict(zip(species_ids, species_nums))
-        self.flux = 1
-        self.init_fluxes = init_fluxes = dict(zip(species_ids, [self.flux]*len(species_ids)))
+        self.population_slope = 1
+        self.init_population_slopes = init_population_slopes = dict(zip(species_ids, [self.population_slope]*len(species_ids)))
         self.molecular_weights = dict(zip(species_ids, species_nums))
         self.local_species_pop = LocalSpeciesPopulation('test', self.init_populations,
-            self.molecular_weights, initial_fluxes=init_fluxes)
-        self.local_species_pop_no_init_flux = LocalSpeciesPopulation(
+            self.molecular_weights, initial_population_slopes=init_population_slopes)
+        self.local_species_pop_no_init_pop_slope = LocalSpeciesPopulation(
             'test', self.init_populations, self.molecular_weights)
 
     def test_init(self):
-        self.assertEqual(self.local_species_pop_no_init_flux._all_species(), set(self.species_ids))
+        self.assertEqual(self.local_species_pop_no_init_pop_slope._all_species(), set(self.species_ids))
         an_LSP = LocalSpeciesPopulation('test', {}, {}, retain_history=False)
         an_LSP.init_cell_state_specie('s1', 2)
         self.assertEqual(an_LSP.read(0, {'s1'}), {'s1': 2})
@@ -274,26 +272,26 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             str(context.exception))
 
     def test_optional_species_argument(self):
-        self.assertEqual(self.local_species_pop_no_init_flux.read(0), self.init_populations)
-        self.assertEqual(self.local_species_pop_no_init_flux.read(2), self.init_populations)
-        self.assertEqual(self.local_species_pop_no_init_flux._check_species(0, species=None), None)
+        self.assertEqual(self.local_species_pop_no_init_pop_slope.read(0), self.init_populations)
+        self.assertEqual(self.local_species_pop_no_init_pop_slope.read(2), self.init_populations)
+        self.assertEqual(self.local_species_pop_no_init_pop_slope._check_species(0, species=None), None)
         t = 3
-        self.local_species_pop_no_init_flux._update_access_times(t, species=None)
-        for specie_id in self.local_species_pop_no_init_flux._all_species():
-            self.assertEqual(self.local_species_pop_no_init_flux.last_access_time[specie_id], t)
+        self.local_species_pop_no_init_pop_slope._update_access_times(t, species=None)
+        for specie_id in self.local_species_pop_no_init_pop_slope._all_species():
+            self.assertEqual(self.local_species_pop_no_init_pop_slope.last_access_time[specie_id], t)
 
     def test_read_one(self):
         test_specie = 'specie_2[c2]'
-        self.assertEqual(self.local_species_pop_no_init_flux.read_one(1, test_specie),
+        self.assertEqual(self.local_species_pop_no_init_pop_slope.read_one(1, test_specie),
             self.init_populations[test_specie])
         with self.assertRaises(SpeciesPopulationError) as context:
-            self.local_species_pop_no_init_flux.read_one(2, 'unknown_specie_id')
+            self.local_species_pop_no_init_pop_slope.read_one(2, 'unknown_specie_id')
         self.assertIn("request for population of unknown specie(s): 'unknown_specie_id'", str(context.exception))
         with self.assertRaises(SpeciesPopulationError) as context:
-            self.local_species_pop_no_init_flux.read_one(0, test_specie)
+            self.local_species_pop_no_init_pop_slope.read_one(0, test_specie)
         self.assertIn("is an earlier access of specie(s)", str(context.exception))
 
-    def reusable_assertions(self, the_local_species_pop, flux):
+    def reusable_assertions(self, the_local_species_pop, population_slope):
         # test both discrete and hybrid species
 
         with self.assertRaises(SpeciesPopulationError) as context:
@@ -304,30 +302,29 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             the_local_species_pop._check_species(0, {'x'})
         self.assertIn("request for population of unknown specie(s):", str(context.exception))
 
+        # populations have not changed
         self.assertEqual(the_local_species_pop.read(0, set(self.species_ids)), self.init_populations)
         first_specie = self.species_ids[0]
         the_local_species_pop.adjust_discretely(0, {first_specie: 3})
         self.assertEqual(the_local_species_pop.read(0, {first_specie}),  {first_specie: 4})
 
-        if flux:
-            # counts: 1 initialization + 3 discrete adjustment + 2*flux:
-            self.assertEqual(the_local_species_pop.read(2, {first_specie}),  {first_specie: 4+2*flux})
-            the_local_species_pop.adjust_continuously(2, {first_specie:(9, 0)})
-            # counts: 1 initialization + 3 discrete adjustment + 9 continuous adjustment + 0 flux = 13:
-            self.assertEqual(the_local_species_pop.read(2, {first_specie}),  {first_specie: 13})
-
+        if population_slope:
+            # counts: 1 initialization + 3 discrete adjustment + 2*population_slope:
+            self.assertEqual(the_local_species_pop.read(2, {first_specie}),  {first_specie: 4+2*population_slope})
+            the_local_species_pop.adjust_continuously(2, {first_specie:0})
+            # counts: 1 initialization + 3 discrete adjustment + 2 population_slope = 6:
+            self.assertEqual(the_local_species_pop.read(2, {first_specie}),  {first_specie: 6})
             for species_id in self.species_ids:
                 self.assertIn(species_id, str(the_local_species_pop))
 
     def test_discrete_and_hybrid(self):
 
-        for (local_species_pop, flux) in [(self.local_species_pop, self.flux),
-            (self.local_species_pop_no_init_flux, None)]:
-            self.reusable_assertions(local_species_pop, flux)
+        for (local_species_pop, population_slope) in [(self.local_species_pop, self.population_slope),
+            (self.local_species_pop_no_init_pop_slope, None)]:
+            self.reusable_assertions(local_species_pop, population_slope)
 
     def test_adjustment_exceptions(self):
         time = 1.0
-        # test_specie_ids = ['specie_2[c2]', 'specie_1[c1]']
         with self.assertRaises(SpeciesPopulationError) as context:
             self.local_species_pop.adjust_discretely(time,
                 dict(zip(self.species_ids, [-10]*len(self.species_ids))))
@@ -335,13 +332,8 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         self.assertIn("negative population predicted", str(context.exception))
 
         with self.assertRaises(SpeciesPopulationError) as context:
-            self.local_species_pop_no_init_flux.adjust_continuously(time, {self.species_ids[0]: (-10, 2)})
-        self.assertIn('initial flux was not provided', str(context.exception))
-
-        with self.assertRaises(SpeciesPopulationError) as context:
-            self.local_species_pop.adjust_continuously(time, {self.species_ids[0]: (-10, 2)})
-        self.assertIn("adjust_continuously error(s) at time {}".format(time), str(context.exception))
-        self.assertIn("negative population predicted", str(context.exception))
+            self.local_species_pop_no_init_pop_slope.adjust_continuously(time, {self.species_ids[0]:2})
+        self.assertIn('initial_population_slope was not provided', str(context.exception))
 
     def test_history(self):
 
@@ -705,10 +697,10 @@ class MockSimulationTestingObject(MockSimulationObject):
             message_types.AdjustPopulationByContinuousSubmodel,
             message_types.GetCurrentProperty]
 
-
+@unittest.skip("skip until 'change' removed from class ContinuousChange and AdjustPopulationByContinuousSubmodel")
 class TestSpeciesPopSimObjectWithAnotherSimObject(unittest.TestCase):
 
-    def try_update_species_pop_sim_obj(self, specie_id, init_pop, mol_weight, init_flux, update_message,
+    def try_update_species_pop_sim_obj(self, specie_id, init_pop, mol_weight, init_population_slope, update_message,
         msg_body, update_time, get_pop_time, expected_value):
         """ Run a simulation that tests an update of a SpeciesPopSimObject by a update_msg_type message.
 
@@ -727,7 +719,7 @@ class TestSpeciesPopSimObjectWithAnotherSimObject(unittest.TestCase):
         if get_pop_time<=update_time:
             raise SpeciesPopulationError('get_pop_time<=update_time')
         species_pop_sim_obj = SpeciesPopSimObject('test_name',
-            {specie_id:init_pop}, {specie_id:mol_weight}, initial_fluxes={specie_id:init_flux})
+            {specie_id:init_pop}, {specie_id:mol_weight}, initial_population_slopes={specie_id:init_population_slope})
         mock_obj = MockSimulationTestingObject('mock_name', self,
             specie_id=specie_id, expected_value=expected_value)
         self.simulator.add_objects([species_pop_sim_obj, mock_obj])
@@ -738,42 +730,44 @@ class TestSpeciesPopSimObjectWithAnotherSimObject(unittest.TestCase):
         self.assertEqual(self.simulator.simulate(get_pop_time+1), 3)
 
     def test_message_types(self):
-        """ Test both discrete and continuous updates, with a range of population & flux values"""
+        """ Test both discrete and continuous updates, with a range of population & population_slope values"""
         s_id = 's'
         update_adjustment = +5
         get_pop_time = 4
         for s_init_pop in range(3, 7, 2):
-            for s_init_flux in range(-1, 2):
+            for s_init_population_slope in range(-1, 2):
                 for update_time in range(1, 4):
 
-                    self.try_update_species_pop_sim_obj(s_id, s_init_pop, 0, s_init_flux,
+                    self.try_update_species_pop_sim_obj(s_id, s_init_pop, 0, s_init_population_slope,
                         message_types.AdjustPopulationByDiscreteSubmodel,
                         message_types.AdjustPopulationByDiscreteSubmodel({s_id:update_adjustment}),
                         update_time, get_pop_time,
-                        s_init_pop + update_adjustment + get_pop_time*s_init_flux)
+                        s_init_pop + update_adjustment + get_pop_time*s_init_population_slope)
 
         """
         Test AdjustPopulationByContinuousSubmodel.
 
-        Note that the expected_value does not include a term for update_time*s_init_flux. This is
+        # TODO: IMPT: Delete this and the related code
+        Note that the expected_value does not include a term for update_time*s_init_population_slope. This is
         deliberately ignored by `wc_sim.multialgorithm.species_populations.DynamicSpecie()` because it is
-        assumed that an adjustment by a continuous submodel will incorporate the flux predicted by
+        assumed that an adjustment by a continuous submodel will incorporate the population_slope predicted by
         the previous iteration of that submodel.
         """
         for s_init_pop in range(3, 8, 2):
-            for s_init_flux in range(-1, 2):
+            for s_init_population_slope in range(-1, 2):
                 for update_time in range(1, 4):
-                    for updated_flux in range(-1, 2):
-                        self.try_update_species_pop_sim_obj(s_id, s_init_pop, 0, s_init_flux,
+                    for updated_population_slope in range(-1, 2):
+                        self.try_update_species_pop_sim_obj(s_id, s_init_pop, 0, s_init_population_slope,
                             message_types.AdjustPopulationByContinuousSubmodel,
                             message_types.AdjustPopulationByContinuousSubmodel({s_id:
-                                message_types.ContinuousChange(update_adjustment, updated_flux)}),
+                                message_types.ContinuousChange(update_adjustment, updated_population_slope)}),
                             update_time, get_pop_time,
                             s_init_pop + update_adjustment +
-                                (get_pop_time-update_time)*updated_flux)
+                                (get_pop_time-update_time)*updated_population_slope)
 
 
 class InitMsg1(SimulationMessage): pass
+
 
 class TestSpeciesPopSimObject(unittest.TestCase):
 

@@ -312,8 +312,8 @@ class AccessSpeciesPopulations(AccessSpeciesPopulationInterface):   # pragma: no
 
         Args:
             time (:obj:`float`): the time at which the population is being adjusted
-            adjustments (:obj:`dict` of `tuple`): map: specie_ids -> (population_adjustment, flux);
-                adjustments to be made to some species populations.
+            population_slopes (:obj:`dict` of `float`): map: specie_id -> population_slope;
+                updated population slopes for some, or all, species populations
 
         See the description for `adjust_discretely` above.
 
@@ -530,13 +530,13 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             history is recorded at each continuous adjustment.
         random_state (:obj:`numpy.random.RandomState`): a PRNG used by all `Species`
     """
-    # TODO(Arthur): support tracking the population history of species added at any time
-    # in the simulation
+    # TODO(Arthur): support tracking the population history of species added at any simulation time
+    # TODO(Arthur): optionally, track the history of all interactions with a DynamicSpecies
     # TODO(Arthur): report an error if a DynamicSpecie is updated by multiple continuous submodels
     # because each of them assumes that they model all changes to its population over their time step
     # TODO(Arthur): molecular_weights should provide MW of each species type, as that's what the model has
-    def __init__(self, name, initial_population, molecular_weights, initial_fluxes=None,
-        retain_history=True):
+    def __init__(self, name, initial_population, molecular_weights, initial_population_slopes=None,
+        retain_history=True, initial_time=0):
         """ Initialize a `LocalSpeciesPopulation` object
 
         Initialize a `LocalSpeciesPopulation` object. Establish its initial population, and initialize
@@ -547,16 +547,19 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
                 dict: specie_id -> initial_population
             molecular_weights (:obj:`dict` of `float`): map: specie_id -> molecular_weight,
                 provided for computing the mass of lists of species in a `LocalSpeciesPopulation`
-            initial_fluxes (:obj:`dict` of `float`, optional): map: specie_id -> initial_flux;
-                initial fluxes for all species whose populations are estimated by a continuous
-                submodel. Fluxes are ignored for species not specified in initial_population.
+            initial_population_slopes (:obj:`dict` of `float`, optional): map: specie_id -> initial_population_slope;
+                all species whose populations are estimated by a continuous submodel must provide an
+                initial population slope; `initial_population_slopes` are ignored for species not
+                specified in `initial_population`. note that most simulations will run a continuous
+                model at initialization (typically time 0), which sets the population slope then.
             retain_history (:obj:`bool`, optional): whether to retain species population history
+            initial_time (:obj:`float`, optional): the initialization time; defaults to 0
 
         Raises:
             :obj:`SpeciesPopulationError`: if the population cannot be initialized
         """
         self.name = name
-        self.time = 0
+        self.time = initial_time
         self._population = {}
         self.last_access_time = {}
         self.random_state = RandomStateManager.instance()
@@ -565,9 +568,9 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             self._initialize_history()
 
         for specie_id in initial_population:
-            if initial_fluxes is not None and specie_id in initial_fluxes:
+            if initial_population_slopes is not None and specie_id in initial_population_slopes:
                 self.init_cell_state_specie(specie_id, initial_population[specie_id],
-                    initial_fluxes[specie_id])
+                    initial_population_slopes[specie_id])
             else:
                 self.init_cell_state_specie(specie_id, initial_population[specie_id])
 
@@ -582,18 +585,18 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         # log initialization data
         debug_log.debug("initial_population: {}".format(DictUtil.to_string_sorted_by_key(
             initial_population)), sim_time=self.time)
-        debug_log.debug("initial_fluxes: {}".format(DictUtil.to_string_sorted_by_key(initial_fluxes)),
+        debug_log.debug("initial_population_slopes: {}".format(DictUtil.to_string_sorted_by_key(initial_population_slopes)),
             sim_time=self.time)
 
-    def init_cell_state_specie(self, specie_id, population, initial_flux_given=None):
-        """ Initialize a specie with the given population and flux
+    def init_cell_state_specie(self, specie_id, population, initial_population_slope=None):
+        """ Initialize a specie with the given population and, optionally, initial population slope
 
         Add a specie to the cell state. The specie's population is set at the current time.
 
         Args:
             specie_id (:obj:`str`): the specie's globally unique identifier
             population (:obj:`float`): initial population of the specie
-            initial_flux_given (:obj:`float`, optional): an initial flux for the specie
+            initial_population_slope (:obj:`float`, optional): an initial population slope for the specie
 
         Raises:
             :obj:`SpeciesPopulationError`: if the specie is already stored by this LocalSpeciesPopulation
@@ -602,7 +605,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             raise SpeciesPopulationError("specie_id '{}' already stored by this "
                 "LocalSpeciesPopulation".format(specie_id))
         self._population[specie_id] = DynamicSpecie(specie_id, self.random_state, population,
-            initial_flux=initial_flux_given)
+            initial_population_slope=initial_population_slope)
         self.last_access_time[specie_id] = self.time
         self._add_to_history(specie_id)
 
@@ -721,39 +724,39 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             raise SpeciesPopulationError("adjust_discretely error(s) at time {}:\n{}".format(
                 time, '\n'.join(errors)))
 
-    def adjust_continuously(self, time, adjustments):
-        """ A continuous submodel adjusts the population of a set of species at simulation time `time`
+    def adjust_continuously(self, time, population_slopes):
+        """ A continuous submodel adjusts the population slopes of a set of species at simulation time `time`
+
+        Species retain the population slopes to interpolate the population until the next
+        call to `adjust_continuously`.
 
         Args:
             time (:obj:`float`): the time at which the population is being adjusted
-            adjustments (:obj:`dict` of `tuple`): map: specie_ids -> (population_adjustment, flux);
-                adjustments to be made to some species populations.
+            population_slopes (:obj:`dict` of `float`): map: specie_id -> population_slope;
+                updated population slopes for some, or all, species populations
 
         Raises:
-            :obj:`SpeciesPopulationError`: if any adjustment attempts to change the population of an
+            :obj:`SpeciesPopulationError`: if any adjustment attempts to change the population slope of an
                 unknown species.
             :obj:`SpeciesPopulationError`: if any population estimate would become negative
         """
-        '''
-        adjustments -> adjustment, just a rate_of_change (population_prime, population_slope)
-        '''
-        self._check_species(time, set(adjustments.keys()))
+        self._check_species(time, set(population_slopes.keys()))
         self.time = time
 
         # record simulation state history
         # TODO(Arthur): maybe also do it in adjust_discretely(); better, separately control its periodicity
         if self._recording_history(): self._record_history()
         errors = []
-        for specie,(adjustment,flux) in adjustments.items():
+        for specie_id, population_slope in population_slopes.items():
             try:
-                self._population[specie].continuous_adjustment(adjustment, time, flux)
-                self._update_access_times(time, [specie])
-                self.log_event('continuous_adjustment', self._population[specie])
+                self._population[specie_id].continuous_adjustment(population_slope, time)
+                self._update_access_times(time, [specie_id])
+                self.log_event('continuous_adjustment', self._population[specie_id])
             except (SpeciesPopulationError, NegativePopulationError) as e:
                 errors.append(str(e))
         if errors:
             # TODO(Arthur): consistently use debug_log
-            debug_log.error("Error: on specie {}: {}".format(specie, '\n'.join(errors)), sim_time=self.time)
+            debug_log.error("Error: on specie {}: {}".format(specie_id, '\n'.join(errors)), sim_time=self.time)
             raise SpeciesPopulationError("adjust_continuously error(s) at time {}:\n{}".format(
                 time, '\n'.join(errors)))
 
@@ -814,7 +817,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
     def log_event(self, message, specie):
         """ Log an event that modifies a specie's population
 
-        Log the event's simulation time, event type, specie population, and current flux (if
+        Log the event's simulation time, event type, specie population, and current population slope (if
         specified).
 
         Args:
@@ -822,12 +825,12 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             specie (:obj:`DynamicSpecie`): the object whose adjustment is being logged
         """
         try:
-            flux = specie.continuous_flux
+            population_slope = specie.population_slope
         except AttributeError:
-            flux = None
-        values = [message, specie.last_population, flux]
+            population_slope = None
+        values = [message, specie.last_population, population_slope]
         values = map(lambda x: str(x), values)
-        # log Sim_time Adjustment_type New_population New_flux
+        # log Sim_time Adjustment_type New_population New_population_slope
         debug_log.debug('\t'.join(values), local_call_depth=1, sim_time=self.time)
 
     def _initialize_history(self):
@@ -948,7 +951,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
 
         Provide the name of this `LocalSpeciesPopulation`, the current time, and the id, population
         of each specie stored by this object. Species modeled by continuous time submodels also
-        have the most recent continuous time adjustment and the current flux.
+        have the most recent continuous time adjustment and the current population slope.
 
         Returns:
             :obj:`str`: a multi-line string describing this LocalSpeciesPopulation's state
@@ -974,7 +977,7 @@ class MakeTestLSP(object):
     DEFAULT_NUM_SPECIES = 10
     DEFAULT_ALL_POPS = 1E6
     DEFAULT_ALL_MOL_WEIGHTS = 50
-    def __init__(self, name=None, initial_population=None, molecular_weights=None, initial_fluxes=None,
+    def __init__(self, name=None, initial_population=None, molecular_weights=None, initial_population_slopes=None,
         retain_history=True, **kwargs):
         """ Initialize a `MakeTestLSP` object
 
@@ -990,9 +993,9 @@ class MakeTestLSP(object):
                 dict: specie_id -> initial_population
             molecular_weights (:obj:`dict` of `float`, optional): map: specie_id -> molecular_weight,
                 provided for computing the mass of lists of species in a `LocalSpeciesPopulation`
-            initial_fluxes (:obj:`dict` of `float`, optional): map: specie_id -> initial_flux;
-                initial fluxes for all species whose populations are estimated by a continuous
-                submodel. Fluxes are ignored for species not specified in initial_population.
+            initial_population_slopes (:obj:`dict` of `float`, optional): map: specie_id -> initial_population_slope;
+                initial population slopes for all species whose populations are estimated by a continuous
+                submodel. Population slopes are ignored for species not specified in initial_population.
             retain_history (:obj:`bool`, optional): whether to retain species population history
         """
         name = 'test_lsp' if name is None else name
@@ -1016,7 +1019,7 @@ class MakeTestLSP(object):
         else:
             self.molecular_weights = molecular_weights
         self.local_species_pop = LocalSpeciesPopulation(name, self.initial_population, self.molecular_weights,
-            initial_fluxes=initial_fluxes, retain_history=initial_fluxes)
+            initial_population_slopes=initial_population_slopes, retain_history=initial_population_slopes)
 
 
 # TODO(Arthur): cover after MVP wc_sim done
@@ -1035,7 +1038,7 @@ class SpeciesPopSimObject(LocalSpeciesPopulation, ApplicationSimulationObject,
     def get_state(self):
         return 'object state to be provided'
 
-    def __init__(self, name, initial_population, molecular_weights, initial_fluxes=None,
+    def __init__(self, name, initial_population, molecular_weights, initial_population_slopes=None,
         retain_history=True):
         """ Initialize a SpeciesPopSimObject object
 
@@ -1050,7 +1053,7 @@ class SpeciesPopSimObject(LocalSpeciesPopulation, ApplicationSimulationObject,
         """
         SimulationObject.__init__(self, name)
         LocalSpeciesPopulation.__init__(self, name, initial_population, molecular_weights,
-            initial_fluxes)
+            initial_population_slopes)
 
     def handle_adjust_discretely_event(self, event):
         """ Handle a simulation event
@@ -1190,9 +1193,10 @@ class DynamicSpecie(object):
     __slots__ = ['specie_name', 'last_population', 'continuous_submodel', 'population_slope', 'continuous_time',
         'random_state']
 
+    # todo: embed time more deeply in a DynamicSpecie -- save a start time for all types of submodels
     def __init__(self, specie_name, random_state, initial_population, initial_population_slope=None,
         initial_continuous_time=0):
-        """ Initialize a specie object at simulation time 0
+        """ Initialize a specie object, defaulting to a simulation time start time of 0
 
         Args:
             specie_name (:obj:`str`): the specie's name; not logically needed, but helpful for error
