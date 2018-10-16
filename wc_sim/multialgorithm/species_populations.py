@@ -535,6 +535,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
     # TODO(Arthur): report an error if a DynamicSpecie is updated by multiple continuous submodels
     # because each of them assumes that they model all changes to its population over their time step
     # TODO(Arthur): molecular_weights should provide MW of each species type, as that's what the model has
+    # TODO(Arthur): test non-zero initial_time
     def __init__(self, name, initial_population, molecular_weights, initial_population_slopes=None,
         retain_history=True, initial_time=0):
         """ Initialize a `LocalSpeciesPopulation` object
