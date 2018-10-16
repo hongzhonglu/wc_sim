@@ -91,7 +91,7 @@ class AccessSpeciesPopulations(AccessSpeciesPopulationInterface):   # pragma: no
     stores.
 
     Attributes:
-        submodel (:obj:`DynamicSubmodel`): the submodel which is using this AccessSpeciesPopulations
+        submodel (:obj:`DynamicSubmodel`): the submodel that's using this `AccessSpeciesPopulations`
         species_locations (:obj:`dict` of `str`): a map indicating the store for each specie used
             by the submodel using this object, that is, the local submodel.
         local_pop_store (:obj:`LocalSpeciesPopulation`): a store of local species
@@ -734,6 +734,9 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
                 unknown species.
             :obj:`SpeciesPopulationError`: if any population estimate would become negative
         """
+        '''
+        adjustments -> adjustment, just a rate_of_change (population_prime, population_slope)
+        '''
         self._check_species(time, set(adjustments.keys()))
         self.time = time
 
@@ -1134,34 +1137,34 @@ class DynamicSpecie(object):
     reactions in which the specie participates. These can be multiple discrete-time submodels and
     at most one continuous-time submodel. (If multiple continuous-time submodels were allowed to
     predict reactions that involve a specie, a mechanism would be needed to reconsile conflicting
-    flux values. We have not addressed that issue yet.)
+    `population_slope` values. We have not addressed that issue yet.)
 
     Discrete-time and continuous-time models adjust the state of a species by the methods
     `discrete_adjustment()` and `continuous_adjustment()`, respectively. These adjustments take the
     following forms,
 
     * `discrete_adjustment(population_change, time)`
-    * `continuous_adjustment(population_change, time, flux)`
+    * `continuous_adjustment(population_slope, time)`
 
     where `population_change` is the increase or decrease in the specie's population, `time` is the
-    time at which that change takes place, and `flux` is the predicted future rate of change of the
+    time at which that change takes place, and `population_slope` is the predicted future rate of change of the
     population.
 
     To improve the accuracy of multi-algorithmic models, we support linear *interpolation* of
     population predictions for species modeled by a continuous-time submodel. An interpolated
-    prediction is based on the most recent continuous-time flux prediction. Thus, we assume
+    prediction is based on the most recent continuous-time population slope prediction. Thus, we assume
     that a population modeled by a continuous model is adjusted sufficiently frequently
-    that the most recent adjustment accurately estimates flux.
+    that the most recent adjustment accurately estimates population slope.
 
     A specie instance stores the most recent value of the specie's population in `last_population`,
     which is initialized when the instance is created. If a specie is modeled by a
-    continuous-time submodel, it also stores the specie's flux in `continuous_flux` and the time
-    of the most recent `continuous_adjustment` in `continuous_time`. Otherwise, `continuous_time`
-    is `None`. Interpolation determines the population prediction `p` at time `t` as::
+    continuous-time submodel, it also stores the specie's rate of change in `population_slope` and the time
+    of the most recent `continuous_adjustment` in `continuous_time`. Interpolation determines the
+    population prediction `p` at time `t` as::
 
         interpolation = 0
-        if not continuous_time is None:
-            interpolation = (t - continuous_time)*continuous_flux
+        if continuous_submodel:
+            interpolation = (t - continuous_time)*population_slope
         p = last_population + interpolation
 
     This approach is completely general, and can be applied to any simulation value
@@ -1177,16 +1180,18 @@ class DynamicSpecie(object):
         last_population (:obj:`float`): population after the most recent adjustment
         continuous_submodel (bool): whether one of the submodels modeling the species is a
             continuous submodel; must be set at initialization
-        continuous_flux (:obj:`float`): if a continuous submodel is modeling the specie, the flux provided
-            at initialization or by the most recent adjustment by a continuous model
-        continuous_time (:obj:`float`): if a continuous submodel is modeling the specie, the simulation
-            time of initialization (0) or the most recent adjustment by the continuous model
+        population_slope (:obj:`float`): if a continuous submodel is modeling the specie, the rate of
+            change to the population provided at initialization or by the most recent adjustment by a
+            continuous model
+        continuous_time (:obj:`float`): if a continuous submodel is modeling the specie, the most
+            recent adjustment by the continuous model; initialized to 0 by default
     """
     # use __slots__ to save space
-    __slots__ = ['specie_name', 'last_population', 'continuous_submodel', 'continuous_flux', 'continuous_time',
+    __slots__ = ['specie_name', 'last_population', 'continuous_submodel', 'population_slope', 'continuous_time',
         'random_state']
 
-    def __init__(self, specie_name, random_state, initial_population, initial_flux=None):
+    def __init__(self, specie_name, random_state, initial_population, initial_population_slope=None,
+        initial_continuous_time=0):
         """ Initialize a specie object at simulation time 0
 
         Args:
@@ -1194,18 +1199,24 @@ class DynamicSpecie(object):
                 reporting, logging, debugging, etc.
             random_state (:obj:`numpy.random.RandomState`): a shared PRNG
             initial_population (int): non-negative number; initial population of the specie
-            initial_flux (number, optional): initial flux for the specie; required for species whose
-                population is estimated, at least in part, by a continuous model
+            initial_population_slope (floatumber, optional): initial rate of change for the specie population;
+                required for species whose
+                population is estimated, at least in part, by a continuous model; a non-zero
+                `initial_population_slope` would be unusual, as it implies that the rate of change of
+                the species population is already known; typically, a continuous submodel will run when
+                the simulation starts and provide a population slope for the start time via `continuous_adjustment`
+            initial_continuous_time (float, optional): initial time for this `DynamicSpecie`;
+                default=0 because most simulations begin then
         """
         assert 0 <= initial_population, '__init__(): population should be >= 0'
         self.specie_name = specie_name
         self.random_state = random_state
         self.last_population = initial_population
         self.continuous_submodel = False
-        if initial_flux is not None:
+        if initial_population_slope is not None:
             self.continuous_submodel = True
-            self.continuous_time = 0
-            self.continuous_flux = initial_flux
+            self.continuous_time = initial_continuous_time
+            self.population_slope = initial_population_slope
 
     def discrete_adjustment(self, population_change, time):
         """ Make a discrete adjustment of the specie's population
@@ -1232,54 +1243,53 @@ class DynamicSpecie(object):
         self.last_population += population_change
         return self.get_population(time)
 
-    def continuous_adjustment(self, population_change, time, flux):
+    def continuous_adjustment(self, population_slope, time):
         """ A continuous-time submodel adjusts the specie's state
 
         A continuous-time submodel, such as an ordinary differential equation (ODE) or a dynamic flux
         balance analysis (FBA) model, uses this method to adjust the specie's state. Each
         integration of a continuous-time model must predict a specie's population change and the
-        population's short-term future rate of change, i.e., its `flux`. Further, since an
-        integration of a continuous-time model at the current time must depend on this specie's
-        population just before the integration, we assume that `population_change` incorporates
-        population changes predicted by the flux provided by the previous `continuous_adjustment`
-        call.
+        population's short-term future rate of change.
 
         Args:
-            population_change (number): modeled increase or decrease in the specie's population
             time (number): the simulation time at which the predicted change occurs; this time is
                 used by `get_population` to interpolate continuous-time predictions between
                 integrations.
-            flux (number): the predicted flux of the specie at the provided time
+            population_slope (number): the predicted rate of change of the specie at the provided time
 
         Returns:
             int: the specie's adjusted population, rounded to an integer
 
         Raises:
-            :obj:`SpeciesPopulationError`: if an initial flux was not provided
+            :obj:`SpeciesPopulationError`: if an initial population slope was not provided
             :obj:`SpeciesPopulationError`: if `time` is not greater than the time of the most recent
                 `continuous_adjustment` call on this `specie`
-            NegativePopulationError: if applying `population_change` makes the population go negative
+            NegativePopulationError: if updating the population based on the previous `population_slope`
+                makes the population go negative
         """
         if not self.continuous_submodel:
-            raise SpeciesPopulationError("continuous_adjustment(): initial flux was not provided")
+            raise SpeciesPopulationError("continuous_adjustment(): initial_population_slope was not provided")
         # the simulation time must advance between adjacent continuous adjustments
         if time <= self.continuous_time:
             raise SpeciesPopulationError("continuous_adjustment(): time <= self.continuous_time: "
                 "{:.2f} < {:.2f}".format(time, self.continuous_time))
-        if self.last_population + population_change < 0:
-            raise NegativePopulationError('continuous_adjustment', self.specie_name,
-                self.last_population, population_change, time-self.continuous_time)
+        if self.last_population + self.population_slope * (time - self.continuous_time) < 0:
+            raise NegativePopulationError("continuous_adjustment: "
+                "population_slope: {}, continuous_time: {}".format(
+                self.population_slope, self.continuous_time),
+                self.specie_name, self.last_population, self.population_slope * (time - self.continuous_time))
+        # add the population change since the last continuous_adjustment
+        self.last_population += self.population_slope * (time - self.continuous_time)
         self.continuous_time = time
-        self.continuous_flux = flux
-        self.last_population += population_change
+        self.population_slope = population_slope
         return self.get_population(time)
 
     def get_population(self, time=None):
         """ Provide the specie's current population
 
         If one of the submodel(s) predicting the specie's population is a continuous-time model,
-        then use the specie's last flux to interpolate the current population, as described in the
-        class documentation.
+        then use the specie's last `population_slope` to interpolate the current population, as
+        described in the class documentation.
 
         Clearly, species populations in biological systems are non-negative integers. However,
         continuous-time models approximate populations with continuous representations, and
@@ -1316,7 +1326,7 @@ class DynamicSpecie(object):
                     time, self.continuous_time))
             interpolation=0
             if config_multialgorithm['interpolate']:
-                interpolation = (time - self.continuous_time) * self.continuous_flux
+                interpolation = (time - self.continuous_time) * self.population_slope
             if self.last_population + interpolation < 0:
                 raise NegativePopulationError('get_population', self.specie_name,
                     self.last_population, interpolation, time - self.continuous_time)
@@ -1325,8 +1335,8 @@ class DynamicSpecie(object):
 
     def __str__(self):
         if self.continuous_submodel:
-            return "specie_name: {}; last_population: {}; continuous_time: {}; continuous_flux: {}".format(
-                self.specie_name, self.last_population, self.continuous_time, self.continuous_flux)
+            return "specie_name: {}; last_population: {}; continuous_time: {}; population_slope: {}".format(
+                self.specie_name, self.last_population, self.continuous_time, self.population_slope)
         else:
             return "specie_name: {}; last_population: {}".format(
                 self.specie_name, self.last_population)
@@ -1334,12 +1344,12 @@ class DynamicSpecie(object):
     @staticmethod
     def heading():
         """ Return a heading for a tab-separated table of species data """
-        return '\t'.join('specie_name last_population continuous_time continuous_flux'.split())
+        return '\t'.join('specie_name last_population continuous_time population_slope'.split())
 
     def row(self):
         """ Return a row for a tab-separated table of species data """
         if self.continuous_submodel:
             return "{}\t{:.2f}\t{:.2f}\t{:.2f}".format(self.specie_name, self.last_population,
-                self.continuous_time, self.continuous_flux)
+                self.continuous_time, self.population_slope)
         else:
             return "{}\t{:.2f}".format(self.specie_name, self.last_population)
