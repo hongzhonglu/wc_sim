@@ -517,58 +517,129 @@ class TestDynamicSpecie(unittest.TestCase):
 
         # DynamicSpecies modeled only by discrete submodel(s)
         s1 = DynamicSpecie('specie', self.random_state, 10)
-        self.assertEqual(s1.get_population(), 10)
+        self.assertEqual(s1.get_population(0), 10)
         self.assertEqual(s1.discrete_adjustment(1, 0), 11)
-        self.assertEqual(s1.get_population(), 11)
-        self.assertEqual(s1.discrete_adjustment(-1, 0), 10)
-        self.assertEqual(s1.get_population(), 10)
+        self.assertEqual(s1.get_population(1), 11)
+        self.assertEqual(s1.discrete_adjustment(-1, 1), 10)
+        self.assertEqual(s1.get_population(2), 10)
 
-        s2 = DynamicSpecie('specie_3', self.random_state, 2, 1)
-        self.assertEqual(s2.discrete_adjustment(3, 4), 9)
+        # DynamicSpecies modeled by both continuous and discrete
+        s2 = DynamicSpecie('specie_3', self.random_state, 2, modeled_continuously=True)
+        self.assertEqual(s2.discrete_adjustment(3, 4), 5)
 
         s3 = DynamicSpecie('specie2', self.random_state, 10)
         self.assertEqual("specie_name: specie2; last_population: 10", str(s3))
         self.assertRegex(s3.row(), 'specie2\t10.*')
 
-        s4 = DynamicSpecie('specie', self.random_state, 10, initial_population_slope=0)
-        self.assertEqual("specie_name: specie; last_population: 10; continuous_time: 0; "
-            "population_slope: 0", str(s4))
-        self.assertRegex(s4.row(), 'specie\t10\..*\t0\..*\t0\..*')
+        s4 = DynamicSpecie('specie', self.random_state, 10, modeled_continuously=True)
+        self.assertEqual("specie_name: specie; last_population: 10; continuous_time: None; "
+            "population_slope: None", str(s4))
+        self.assertRegex(s4.row(), '^specie\t10\..*$')
+        s4.continuous_adjustment(2, 3)
+        self.assertRegex(s4.row(), '^specie\t10\..*\t3\..*\t2\..*$')
 
-        with self.assertRaises(SpeciesPopulationError) as context:
-            s4.continuous_adjustment(2, -23)
-        self.assertIn('continuous_adjustment(): time <= self.continuous_time', str(context.exception))
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("continuous_adjustment(): adjustment_time is earlier than latest prior adjustment")):
+            s4.continuous_adjustment(0, 0)
 
-        self.assertEqual(s4.continuous_adjustment(1, 4), 10)
-        self.assertEqual(s4.get_population(4.0), 10)
-        self.assertEqual(s4.get_population(6.0), 12)
+        self.assertEqual(s4.continuous_adjustment(1, 4), 12)
 
         # ensure that continuous_adjustment() returns an integral population
         s4.continuous_adjustment(0.5, 6)
         time = 7
-        self.assertEqual(s4.last_population + s4.population_slope * (time - s4.continuous_time), 12.5)
+        self.assertEqual(s4.last_population + s4.population_slope * (time - s4.continuous_time), 14.5)
         adjusted_pop = s4.get_population(time)
         self.assertEqual(int(adjusted_pop), adjusted_pop)
 
-        with self.assertRaises(SpeciesPopulationError) as context:
-            s4.get_population()
-        self.assertIn('get_population(): time needed because continuous adjustment received at time',
-            str(context.exception))
-
-        with self.assertRaises(SpeciesPopulationError) as context:
-            s4.get_population(3)
-        self.assertIn('get_population(): time < self.continuous_time', str(context.exception))
-
-        with self.assertRaises(SpeciesPopulationError) as context:
-            DynamicSpecie('specie', self.random_state, 10).continuous_adjustment(2, 1)
-        self.assertIn('initial_population_slope was not provided', str(context.exception))
-
         self.assertRegex(DynamicSpecie.heading(), 'specie_name\t.*')
 
-        # raise asserts
-        with self.assertRaises(AssertionError) as context:
+        # raise assert
+        with self.assertRaisesRegexp(AssertionError, re.escape('__init__(): population should be >= 0')):
             DynamicSpecie('specie', self.random_state, -10)
-        self.assertIn('__init__(): population should be >= 0', str(context.exception))
+
+        s5 = DynamicSpecie('s5', self.random_state, 10)
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("continuous_adjustment(): DynamicSpecie not modeled by a continuous submodel")):
+            s5.continuous_adjustment(0, 0)
+
+    def test_first_continuous_adjustment(self):
+
+        # DynamicSpecies modeled by both continuous and discrete
+        pop = 1
+        ds_hybrid = DynamicSpecie('ds_hybrid', self.random_state, pop, modeled_continuously=True)
+        self.assertTrue(ds_hybrid.continuous_time is None)
+        time = 0
+        self.assertEqual(ds_hybrid.get_population(time), pop)
+        time = 1
+        # first continuous adjustment
+        ds_hybrid.continuous_adjustment(0.5, time)
+        self.assertTrue(ds_hybrid.continuous_time is not None)
+        self.assertEqual(ds_hybrid.continuous_time, time)
+        time = 2
+        pops = set()
+        # get_population() does interpolation and rounding
+        for _ in range(100):
+            pops.add(ds_hybrid.get_population(time))
+        self.assertEqual(pops, {1, 2})
+        # another continuous adjustment
+        time = 3
+        ds_hybrid.continuous_adjustment(0, time)
+        # adds 1 molecule since the last continuous adjustment
+        self.assertEqual(ds_hybrid.get_population(time), pop + 1)
+
+    def test_validation(self):
+
+        ### DynamicSpecies modeled only by a discrete submodel ###
+        ds_discrete = DynamicSpecie('ds_discrete', self.random_state, 0)
+        self.assertTrue(ds_discrete.last_adjustment_time == ds_discrete.last_read_time == -float('inf'))
+        time = 1
+        ds_discrete.get_population(time)
+        self.assertEqual(ds_discrete.last_read_time, time)
+        time = 3
+        ds_discrete.discrete_adjustment(0, time)
+        self.assertEqual(ds_discrete.last_adjustment_time, time)
+
+        # make exceptions
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "get_population\(\): read_time is earlier than latest prior adjustment: "):
+            ds_discrete.get_population(time-1)
+
+        time = 5
+        ds_discrete.get_population(time)
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "discrete_adjustment\(\): adjustment_time is earlier than latest prior read: "):
+            ds_discrete.discrete_adjustment(0, time-1)
+
+        time = 6
+        ds_discrete.discrete_adjustment(0, time)
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "discrete_adjustment\(\): adjustment_time is earlier than latest prior adjustment: "):
+            ds_discrete.discrete_adjustment(0, time-1)
+
+        ### DynamicSpecies modeled by both continuous and discrete ###
+        ds_hybrid = DynamicSpecie('ds_hybrid', self.random_state, 0, modeled_continuously=True)
+        time = 0
+        ds_hybrid.continuous_adjustment(0, time)
+        self.assertEqual(ds_hybrid.last_adjustment_time, time)
+
+        # make exceptions
+        time = 2
+        ds_hybrid.get_population(time)
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "continuous_adjustment\(\): adjustment_time is earlier than latest prior read: "):
+            ds_hybrid.continuous_adjustment(0, time-1)
+
+        time = 4
+        ds_hybrid.continuous_adjustment(0, time)
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "continuous_adjustment\(\): adjustment_time is earlier than latest prior adjustment: "):
+            ds_hybrid.continuous_adjustment(0, time-1)
+
+        time = 6
+        ds_hybrid.discrete_adjustment(0, time)
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "continuous_adjustment\(\): adjustment_time is earlier than latest prior adjustment: "):
+            ds_hybrid.continuous_adjustment(0, time-1)
 
     def test_species_with_interpolation_false(self):
         # change the interpolation
@@ -576,7 +647,7 @@ class TestDynamicSpecie(unittest.TestCase):
         existing_interpolate = config_multialgorithm['interpolate']
         config_multialgorithm['interpolate'] = False
 
-        s1 = DynamicSpecie('specie', self.random_state, 10, initial_population_slope=1)
+        s1 = DynamicSpecie('specie', self.random_state, 10)
         self.assertEqual(s1.get_population(time=0), 10)
         self.assertEqual(s1.get_population(time=1), 10)
         # change back because all imports may already have been cached
@@ -604,46 +675,52 @@ class TestDynamicSpecie(unittest.TestCase):
         self.assertTrue(n1 in d)
 
     def test_raise_NegativePopulationError(self):
-        s1 = DynamicSpecie('specie_3', self.random_state, 2, initial_population_slope=-2.0)
+        s1 = DynamicSpecie('specie_3', self.random_state, 2)
 
+        time = 0
         with self.assertRaises(NegativePopulationError) as context:
-            s1.discrete_adjustment(-3, 0)
+            s1.discrete_adjustment(-3, time)
         self.assertEqual(context.exception, NegativePopulationError('discrete_adjustment', 'specie_3', 2, -3))
 
-        with self.assertRaises(NegativePopulationError) as context:
-            s1.discrete_adjustment(0, 3)
-        self.assertEqual(context.exception, NegativePopulationError('get_population', 'specie_3', 2, -6, 3))
+        s2 = DynamicSpecie('specie_3', self.random_state, 3)
+        self.assertEqual(s2.get_population(1), 3)
 
         with self.assertRaises(NegativePopulationError) as context:
-            s1.get_population(2)
-        self.assertEqual(context.exception, NegativePopulationError('get_population', 'specie_3', 2, -4.0, 2))
-
-        s1 = DynamicSpecie('specie_3', self.random_state, 3)
-        self.assertEqual(s1.get_population(1), 3)
-
-        with self.assertRaises(NegativePopulationError) as context:
-            s1.discrete_adjustment(-4, 1)
+            s2.discrete_adjustment(-4, 1)
         self.assertEqual(context.exception, NegativePopulationError('discrete_adjustment', 'specie_3', 3, -4))
 
-        s3 = DynamicSpecie('specie_3', self.random_state, 2, initial_population_slope=-2.0)
+        pop = 2
+        ds_hybrid_1 = DynamicSpecie('ds_hybrid_1', self.random_state, pop, modeled_continuously=True)
+        time_0 = 0
+        ds_hybrid_1.continuous_adjustment(-2, time_0)
+        with self.assertRaises(NegativePopulationError) as context:
+            time_1 = 2
+            ds_hybrid_1.get_population(time_1)
+        self.assertEqual(context.exception, NegativePopulationError('get_population', 'ds_hybrid_1',
+            pop, -4.0, time_1 - time_0))
+
+        ds_hybrid_2 = DynamicSpecie('ds_hybrid_2', self.random_state, 2, modeled_continuously=True)
+        time = 0
+        ds_hybrid_2.continuous_adjustment(-3, time)
         with self.assertRaisesRegexp(NegativePopulationError,
             "continuous_adjustment: population_slope:.*, continuous_time:.*: negative population predicted"):
-            s3.continuous_adjustment(0, 4)
+            time = 1
+            ds_hybrid_2.continuous_adjustment(0, time)
 
-    def test_Specie_stochastic_rounding(self):
+    def test_stochastic_rounding(self):
         s1 = DynamicSpecie('specie', self.random_state, 10.5)
 
         samples = 1000
         for i in range(samples):
-            pop = s1.get_population()
+            pop = s1.get_population(0)
             self.assertTrue(pop in [10, 11])
 
-        mean = np.mean([s1.get_population() for i in range(samples) ])
+        mean = np.mean([s1.get_population(0) for i in range(samples) ])
         min = 10 + binom.ppf(0.01, n=samples, p=0.5) / samples
         max = 10 + binom.ppf(0.99, n=samples, p=0.5) / samples
         self.assertTrue(min <= mean <= max)
 
-        s1 = DynamicSpecie('specie', self.random_state, 10.5, initial_population_slope=0)
+        s1 = DynamicSpecie('specie', self.random_state, 10.5, modeled_continuously=True)
         s1.continuous_adjustment(0.25, 1)
         for i in range(samples):
             self.assertEqual(s1.get_population(3), 11.0)

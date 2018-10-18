@@ -1167,7 +1167,7 @@ class DynamicSpecie(object):
     population prediction `p` at time `t` as::
 
         interpolation = 0
-        if continuous_submodel:
+        if modeled_continuously:
             interpolation = (t - continuous_time)*population_slope
         p = last_population + interpolation
 
@@ -1182,21 +1182,24 @@ class DynamicSpecie(object):
             reporting, logging, debugging, etc.
         random_state (:obj:`numpy.random.RandomState`): a shared PRNG
         last_population (:obj:`float`): population after the most recent adjustment
-        continuous_submodel (bool): whether one of the submodels modeling the species is a
+        modeled_continuously (bool): whether one of the submodels modeling the species is a
             continuous submodel; must be set at initialization
         population_slope (:obj:`float`): if a continuous submodel is modeling the specie, the rate of
             change to the population provided at initialization or by the most recent adjustment by a
             continuous model
         continuous_time (:obj:`float`): if a continuous submodel is modeling the specie, the most
-            recent adjustment by the continuous model; initialized to 0 by default
+            recent adjustment by the continuous model; initialized to None to indicate that a
+            continuous adjustment has not been made yet
+        last_adjustment_time (:obj:`float`): the time of the latest adjustment; used to prevent
+            reads in the past
+        last_read_time (:obj:`float`): the time of the latest read; used to prevent prior adjustments
     """
     # use __slots__ to save space
-    __slots__ = ['specie_name', 'last_population', 'continuous_submodel', 'population_slope', 'continuous_time',
-        'random_state']
+    __slots__ = ['specie_name', 'random_state', 'last_population', 'modeled_continuously', 'population_slope',
+        'continuous_time', 'last_adjustment_time', 'last_read_time']
 
     # todo: embed time more deeply in a DynamicSpecie -- save a start time for all types of submodels
-    def __init__(self, specie_name, random_state, initial_population, initial_population_slope=None,
-        initial_continuous_time=0):
+    def __init__(self, specie_name, random_state, initial_population, modeled_continuously=False):
         """ Initialize a specie object, defaulting to a simulation time start time of 0
 
         Args:
@@ -1204,24 +1207,44 @@ class DynamicSpecie(object):
                 reporting, logging, debugging, etc.
             random_state (:obj:`numpy.random.RandomState`): a shared PRNG
             initial_population (int): non-negative number; initial population of the specie
-            initial_population_slope (floatumber, optional): initial rate of change for the specie population;
-                required for species whose
-                population is estimated, at least in part, by a continuous model; a non-zero
-                `initial_population_slope` would be unusual, as it implies that the rate of change of
-                the species population is already known; typically, a continuous submodel will run when
-                the simulation starts and provide a population slope for the start time via `continuous_adjustment`
-            initial_continuous_time (float, optional): initial time for this `DynamicSpecie`;
-                default=0 because most simulations begin then
+            modeled_continuously (bool, optional): whether this species is modeled by a continuous submodel;
+                default=`False`
         """
         assert 0 <= initial_population, '__init__(): population should be >= 0'
         self.specie_name = specie_name
         self.random_state = random_state
         self.last_population = initial_population
-        self.continuous_submodel = False
-        if initial_population_slope is not None:
-            self.continuous_submodel = True
-            self.continuous_time = initial_continuous_time
-            self.population_slope = initial_population_slope
+        self.modeled_continuously = modeled_continuously
+        if modeled_continuously:
+            self.population_slope = None
+            # continuous_time is None indicates that a continuous_adjustment() has not been made yet
+            self.continuous_time = None
+        self.last_adjustment_time = -float('inf')
+        self.last_read_time = -float('inf')
+
+    def update_last_adjustment_time(self, adjustment_time):
+        self.last_adjustment_time = max(self.last_adjustment_time, adjustment_time)
+
+    def update_last_read_time(self, read_time):
+        self.last_read_time = max(self.last_read_time, read_time)
+
+    def validate_adjustment_time(self, adjustment_time, method):
+        # error if `adjustment_time` is earlier than any prior adjustment or any prior read
+        if adjustment_time < self.last_adjustment_time:
+            raise SpeciesPopulationError(
+                "{}(): adjustment_time is earlier than latest prior adjustment: "
+                "{:.2f} < {:.2f}".format(method, adjustment_time, self.last_adjustment_time))
+        if adjustment_time < self.last_read_time:
+            raise SpeciesPopulationError(
+                "{}(): adjustment_time is earlier than latest prior read: "
+                "{:.2f} < {:.2f}".format(method, adjustment_time, self.last_read_time))
+
+    def validate_read_time(self, read_time, method):
+        # error if `read_time` is earlier than any previous adjustment
+        if read_time < self.last_read_time:
+            raise SpeciesPopulationError(
+                "{}(): read_time is earlier than latest prior adjustment: "
+                "{:.2f} < {:.2f}".format(method, read_time, self.last_adjustment_time))
 
     def discrete_adjustment(self, population_change, time):
         """ Make a discrete adjustment of the specie's population
@@ -1241,11 +1264,13 @@ class DynamicSpecie(object):
             NegativePopulationError: if the predicted population at `time` is negative or
             if decreasing the population by `population_change` would make the population negative
         """
+        self.validate_adjustment_time(time, 'discrete_adjustment')
         current_population = self.get_population(time)
         if current_population + population_change < 0:
             raise NegativePopulationError('discrete_adjustment', self.specie_name,
                 self.last_population, population_change)
         self.last_population += population_change
+        self.update_last_adjustment_time(time)
         return self.get_population(time)
 
     def continuous_adjustment(self, population_slope, time):
@@ -1272,24 +1297,26 @@ class DynamicSpecie(object):
             NegativePopulationError: if updating the population based on the previous `population_slope`
                 makes the population go negative
         """
-        if not self.continuous_submodel:
-            raise SpeciesPopulationError("continuous_adjustment(): initial_population_slope was not provided")
-        # the simulation time must advance between adjacent continuous adjustments
-        if time <= self.continuous_time:
-            raise SpeciesPopulationError("continuous_adjustment(): time <= self.continuous_time: "
-                "{:.2f} < {:.2f}".format(time, self.continuous_time))
-        if self.last_population + self.population_slope * (time - self.continuous_time) < 0:
-            raise NegativePopulationError("continuous_adjustment: "
-                "population_slope: {}, continuous_time: {}".format(
-                self.population_slope, self.continuous_time),
-                self.specie_name, self.last_population, self.population_slope * (time - self.continuous_time))
-        # add the population change since the last continuous_adjustment
-        self.last_population += self.population_slope * (time - self.continuous_time)
+        if not self.modeled_continuously:
+            raise SpeciesPopulationError(
+                "continuous_adjustment(): DynamicSpecie not modeled by a continuous submodel; "
+                "set modeled_continuously True")
+        self.validate_adjustment_time(time, 'continuous_adjustment')
+        # self.continuous_time is None until the first continuous_adjustment()
+        if self.continuous_time is not None:
+            if self.last_population + self.population_slope * (time - self.continuous_time) < 0:
+                raise NegativePopulationError("continuous_adjustment: "
+                    "population_slope: {}, continuous_time: {}".format(
+                    self.population_slope, self.continuous_time),
+                    self.specie_name, self.last_population, self.population_slope * (time - self.continuous_time))
+            # add the population change since the last continuous_adjustment
+            self.last_population += self.population_slope * (time - self.continuous_time)
         self.continuous_time = time
         self.population_slope = population_slope
+        self.update_last_adjustment_time(time)
         return self.get_population(time)
 
-    def get_population(self, time=None):
+    def get_population(self, time):
         """ Provide the specie's current population
 
         If one of the submodel(s) predicting the specie's population is a continuous-time model,
@@ -1309,37 +1336,35 @@ class DynamicSpecie(object):
         adjustment operations may **NOT** return a sequence of equal population values.*
 
         Args:
-            time (number, optional): the current simulation time; `time` is required if one of the
-                submodels modeling the specie is a continuous-time submodel.
+            time (number): the current simulation time
 
         Returns:
             int: an integer approximation of the specie's adjusted population
 
         Raises:
-            :obj:`SpeciesPopulationError`: if `time` is required but not provided
-            :obj:`SpeciesPopulationError`: if `time` is earlier than the time of a previous continuous adjustment
+            :obj:`SpeciesPopulationError`: if `time` is earlier than the time of a previous continuous
+                adjustment or discrete adjustment
             NegativePopulationError: if interpolation predicts a negative population
         """
-        if not self.continuous_submodel:
+        self.validate_read_time(time, 'get_population')
+        if not self.modeled_continuously:
+            self.update_last_read_time(time)
             return self.random_state.round(self.last_population)
         else:
-            if time is None:
-                raise SpeciesPopulationError("get_population(): time needed because "
-                    "continuous adjustment received at time {:.2f}".format(self.continuous_time))
-            if time < self.continuous_time:
-                raise SpeciesPopulationError("get_population(): time < self.continuous_time: {:.2f} < {:.2f}\n".format(
-                    time, self.continuous_time))
             interpolation=0
-            if config_multialgorithm['interpolate']:
-                interpolation = (time - self.continuous_time) * self.population_slope
-            if self.last_population + interpolation < 0:
-                raise NegativePopulationError('get_population', self.specie_name,
-                    self.last_population, interpolation, time - self.continuous_time)
+            if self.continuous_time is not None:
+                if config_multialgorithm['interpolate']:
+                    interpolation = (time - self.continuous_time) * self.population_slope
+                if self.last_population + interpolation < 0:
+                    raise NegativePopulationError('get_population', self.specie_name,
+                        self.last_population, interpolation, time - self.continuous_time)
             float_copy_number = self.last_population + interpolation
+            self.update_last_read_time(time)
+            # todo: make sure this cannot return a negative number:
             return self.random_state.round(float_copy_number)
 
     def __str__(self):
-        if self.continuous_submodel:
+        if self.modeled_continuously:
             return "specie_name: {}; last_population: {}; continuous_time: {}; population_slope: {}".format(
                 self.specie_name, self.last_population, self.continuous_time, self.population_slope)
         else:
@@ -1353,8 +1378,11 @@ class DynamicSpecie(object):
 
     def row(self):
         """ Return a row for a tab-separated table of species data """
-        if self.continuous_submodel:
-            return "{}\t{:.2f}\t{:.2f}\t{:.2f}".format(self.specie_name, self.last_population,
+        if self.modeled_continuously:
+            if self.continuous_time is None:
+                return "{}\t{:.2f}".format(self.specie_name, self.last_population)
+            else:
+                return "{}\t{:.2f}\t{:.2f}\t{:.2f}".format(self.specie_name, self.last_population,
                 self.continuous_time, self.population_slope)
         else:
             return "{}\t{:.2f}".format(self.specie_name, self.last_population)
