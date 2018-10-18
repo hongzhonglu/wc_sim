@@ -536,8 +536,8 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
     # because each of them assumes that they model all changes to its population over their time step
     # TODO(Arthur): molecular_weights should provide MW of each species type, as that's what the model has
     # TODO(Arthur): test non-zero initial_time
-    def __init__(self, name, initial_population, molecular_weights, initial_population_slopes=None,
-        retain_history=True, initial_time=0):
+    def __init__(self, name, initial_population, molecular_weights,
+        retain_history=True, initial_time=0, model_continuously=False):
         """ Initialize a `LocalSpeciesPopulation` object
 
         Initialize a `LocalSpeciesPopulation` object. Establish its initial population, and initialize
@@ -548,11 +548,6 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
                 dict: specie_id -> initial_population
             molecular_weights (:obj:`dict` of `float`): map: specie_id -> molecular_weight,
                 provided for computing the mass of lists of species in a `LocalSpeciesPopulation`
-            initial_population_slopes (:obj:`dict` of `float`, optional): map: specie_id -> initial_population_slope;
-                all species whose populations are estimated by a continuous submodel must provide an
-                initial population slope; `initial_population_slopes` are ignored for species not
-                specified in `initial_population`. note that most simulations will run a continuous
-                model at initialization (typically time 0), which sets the population slope then.
             retain_history (:obj:`bool`, optional): whether to retain species population history
             initial_time (:obj:`float`, optional): the initialization time; defaults to 0
 
@@ -569,11 +564,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             self._initialize_history()
 
         for specie_id in initial_population:
-            if initial_population_slopes is not None and specie_id in initial_population_slopes:
-                self.init_cell_state_specie(specie_id, initial_population[specie_id],
-                    initial_population_slopes[specie_id])
-            else:
-                self.init_cell_state_specie(specie_id, initial_population[specie_id])
+            self.init_cell_state_specie(specie_id, initial_population[specie_id], model_continuously)
 
         unknown_weights = set(initial_population.keys()) - set(molecular_weights.keys())
         if unknown_weights:
@@ -586,10 +577,8 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         # log initialization data
         debug_log.debug("initial_population: {}".format(DictUtil.to_string_sorted_by_key(
             initial_population)), sim_time=self.time)
-        debug_log.debug("initial_population_slopes: {}".format(DictUtil.to_string_sorted_by_key(initial_population_slopes)),
-            sim_time=self.time)
 
-    def init_cell_state_specie(self, specie_id, population, initial_population_slope=None):
+    def init_cell_state_specie(self, specie_id, population, model_continuously):
         """ Initialize a specie with the given population and, optionally, initial population slope
 
         Add a specie to the cell state. The specie's population is set at the current time.
@@ -597,7 +586,6 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         Args:
             specie_id (:obj:`str`): the specie's globally unique identifier
             population (:obj:`float`): initial population of the specie
-            initial_population_slope (:obj:`float`, optional): an initial population slope for the specie
 
         Raises:
             :obj:`SpeciesPopulationError`: if the specie is already stored by this LocalSpeciesPopulation
@@ -606,7 +594,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             raise SpeciesPopulationError("specie_id '{}' already stored by this "
                 "LocalSpeciesPopulation".format(specie_id))
         self._population[specie_id] = DynamicSpecie(specie_id, self.random_state, population,
-            initial_population_slope=initial_population_slope)
+            modeled_continuously=model_continuously)
         self.last_access_time[specie_id] = self.time
         self._add_to_history(specie_id)
 
@@ -1019,8 +1007,8 @@ class MakeTestLSP(object):
             self.molecular_weights = dict(zip(self.species_ids, [self.all_mol_weights]*len(self.species_ids)))
         else:
             self.molecular_weights = molecular_weights
-        self.local_species_pop = LocalSpeciesPopulation(name, self.initial_population, self.molecular_weights,
-            initial_population_slopes=initial_population_slopes, retain_history=initial_population_slopes)
+        self.local_species_pop = LocalSpeciesPopulation(name, self.initial_population, self.molecular_weights)
+        # todo: use initial_population_slopes=initial_population_slopes, retain_history=initial_population_slopes)
 
 
 # TODO(Arthur): cover after MVP wc_sim done

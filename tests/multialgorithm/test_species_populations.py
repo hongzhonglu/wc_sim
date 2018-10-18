@@ -239,22 +239,26 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             for compartment_id in compartment_ids[:2]:
                 species_ids.append(wc_lang.core.Species.gen_id(species_type_id, compartment_id))
         self.init_populations = dict(zip(species_ids, species_nums))
-        self.population_slope = 1
-        self.init_population_slopes = init_population_slopes = dict(zip(species_ids, [self.population_slope]*len(species_ids)))
         self.molecular_weights = dict(zip(species_ids, species_nums))
+
         self.local_species_pop = LocalSpeciesPopulation('test', self.init_populations,
-            self.molecular_weights, initial_population_slopes=init_population_slopes)
+            self.molecular_weights, model_continuously=True)
+        self.population_slope = 1
+        # todo: clean up this hack
+        for specie_id, dynamic_species in self.local_species_pop._population.items():
+            dynamic_species.continuous_adjustment(self.population_slope, 0)
+
         self.local_species_pop_no_init_pop_slope = LocalSpeciesPopulation(
-            'test', self.init_populations, self.molecular_weights)
+            'test', self.init_populations, self.molecular_weights,  model_continuously=False)
 
     def test_init(self):
         self.assertEqual(self.local_species_pop_no_init_pop_slope._all_species(), set(self.species_ids))
         an_LSP = LocalSpeciesPopulation('test', {}, {}, retain_history=False)
-        an_LSP.init_cell_state_specie('s1', 2)
+        an_LSP.init_cell_state_specie('s1', 2, model_continuously=False)
         self.assertEqual(an_LSP.read(0, {'s1'}), {'s1': 2})
 
         with self.assertRaises(SpeciesPopulationError) as context:
-            an_LSP.init_cell_state_specie('s1', 2)
+            an_LSP.init_cell_state_specie('s1', 2, model_continuously=False)
         self.assertIn("specie_id 's1' already stored by this LocalSpeciesPopulation",
             str(context.exception))
 
@@ -306,14 +310,14 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         self.assertEqual(the_local_species_pop.read(0, set(self.species_ids)), self.init_populations)
         first_specie = self.species_ids[0]
         the_local_species_pop.adjust_discretely(0, {first_specie: 3})
-        self.assertEqual(the_local_species_pop.read(0, {first_specie}),  {first_specie: 4})
+        self.assertEqual(the_local_species_pop.read(0, {first_specie}), {first_specie: 4})
 
         if population_slope:
             # counts: 1 initialization + 3 discrete adjustment + 2*population_slope:
-            self.assertEqual(the_local_species_pop.read(2, {first_specie}),  {first_specie: 4+2*population_slope})
+            self.assertEqual(the_local_species_pop.read(2, {first_specie}), {first_specie: 4+2*population_slope})
             the_local_species_pop.adjust_continuously(2, {first_specie:0})
             # counts: 1 initialization + 3 discrete adjustment + 2 population_slope = 6:
-            self.assertEqual(the_local_species_pop.read(2, {first_specie}),  {first_specie: 6})
+            self.assertEqual(the_local_species_pop.read(2, {first_specie}), {first_specie: 6})
             for species_id in self.species_ids:
                 self.assertIn(species_id, str(the_local_species_pop))
 
@@ -330,10 +334,6 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
                 dict(zip(self.species_ids, [-10]*len(self.species_ids))))
         self.assertIn("adjust_discretely error(s) at time {}".format(time), str(context.exception))
         self.assertIn("negative population predicted", str(context.exception))
-
-        with self.assertRaises(SpeciesPopulationError) as context:
-            self.local_species_pop_no_init_pop_slope.adjust_continuously(time, {self.species_ids[0]:2})
-        self.assertIn('initial_population_slope was not provided', str(context.exception))
 
     def test_history(self):
 
