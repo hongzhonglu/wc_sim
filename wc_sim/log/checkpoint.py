@@ -26,6 +26,7 @@ class Checkpoint(object):
         state (:obj:`object`): the simulated model's state at time `time`
         random_state (:obj:`object`): the state of the simulator's random number generator at time `time`
     """
+    NUM_FRACTIONAL_DIGITS = 6
 
     def __init__(self, time, state, random_state):
         self.time = time
@@ -41,7 +42,7 @@ class Checkpoint(object):
             dirname (:obj:`str`): directory to read/write checkpoint data
         """
 
-        file_name = Checkpoint.get_file_name(dirname, checkpoint.time)
+        file_name = Checkpoint.get_file_name(dirname, checkpoint.time, new=True)
 
         with open(file_name, 'wb') as file:
             pickle.dump(checkpoint, file)
@@ -83,8 +84,8 @@ class Checkpoint(object):
         with open(file_name, 'rb') as file:
             return pickle.load(file)
 
-    @staticmethod
-    def list_checkpoints(dirname, error_if_empty=True):
+    @classmethod
+    def list_checkpoints(cls, dirname, error_if_empty=True):
         """ Get sorted list of times of saved checkpoints in checkpoint directory `dirname`.
 
         Args:
@@ -101,7 +102,8 @@ class Checkpoint(object):
         # find checkpoint times
         checkpoint_times = []
         for file_name in os.listdir(dirname):
-            match = re.match('^(\d+\.\d{6,6}).pickle$', file_name)
+            match = re.match('^(\d+\.\d{{{},{}}}).pickle$'.format(
+                cls.NUM_FRACTIONAL_DIGITS, cls.NUM_FRACTIONAL_DIGITS), file_name)
             if os.path.isfile(os.path.join(dirname, file_name)) and match:
                 checkpoint_times.append(float(match.group(1)))
 
@@ -115,19 +117,27 @@ class Checkpoint(object):
         # return list of checkpoint times
         return checkpoint_times
 
-    @staticmethod
-    def get_file_name(dirname, time):
+    @classmethod
+    def get_file_name(cls, dirname, time, new=False):
         """ Get file name for checkpoint at time `time`
+
+        If new, make a filename with a time value rounded to the nearest value with
+        `NUM_FRACTIONAL_DIGITS` (currently 6) digits after
+        the decimal point. Otherwise, simply convert the `time` value to a pickle filename.
 
         Args:
             dirname (:obj:`str`): directory to read/write checkpoint data
             time (:obj:`float`): time in seconds
+            new (:obj:`bool`, optional): whether a new value is being made
 
         Returns:
             :obj:`str`: file name for checkpoint at time `time`
         """
 
-        return os.path.join(dirname, '{:0.6f}.pickle'.format(math.floor(time * 1e6) / 1e6))
+        if new:
+            time = round(time, cls.NUM_FRACTIONAL_DIGITS)
+        format_string = '{{:0.{}f}}.pickle'.format(cls.NUM_FRACTIONAL_DIGITS)
+        return os.path.join(dirname, format_string.format(time))
 
     def __str__(self):
         """ Provide a human readable representation of this `Checkpoint`

@@ -72,6 +72,19 @@ class CheckpointLogTest(unittest.TestCase):
         shutil.rmtree(self.checkpoint_dir)
         shutil.rmtree(self.out_dir)
 
+    def test_get_file_name(self):
+        # previous implementation of get_file_name() failed this test
+        dir = self.checkpoint_dir
+        time = 4.1
+        file_name = Checkpoint.get_file_name(dir, time, new=True)
+        self.assertEqual(file_name, Checkpoint.get_file_name(dir, time))
+
+        for digits in range(1,10):
+            Checkpoint.NUM_FRACTIONAL_DIGITS = digits
+            for time in [1, 4/3, 4.1, 1000000, 1000000 + 4/3]:
+                file_name = Checkpoint.get_file_name(dir, time, new=True)
+                self.assertEqual(file_name, Checkpoint.get_file_name(dir, time))
+
     def test_constructor_creates_checkpoint_dir(self):
         checkpoint_dir = os.path.join(self.checkpoint_dir, 'checkpoint')
         checkpoint_step = 2
