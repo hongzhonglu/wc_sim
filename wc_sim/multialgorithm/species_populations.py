@@ -825,7 +825,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
     def _initialize_history(self):
         """ Initialize the population history with current population """
         self._history = {}
-        self._history['time'] = [self.time]  # a list of times at which population is recorded
+        self._history['time'] = []  # a list of times at which population is recorded
         # the value of self._history['population'][specie_id] is a list of
         # the population of specie_id at the times history is recorded
         self._history['population'] = {}
@@ -838,7 +838,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         """
         if self._recording_history():
             population = self.read_one(self.time, specie_id)
-            self._history['population'][specie_id] = [population]
+            self._history['population'][specie_id] = []
 
     def _recording_history(self):
         """ Is history being recorded?
@@ -858,7 +858,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             :obj:`SpeciesPopulationError`: if the current time is not greater than the previous time at which the
             history was recorded.
         """
-        if not self._history['time'][-1] < self.time:
+        if self._history['time'] and not self._history['time'][-1] < self.time:
             raise SpeciesPopulationError("time of previous _record_history() ({}) not less than current time ({})".format(
                 self._history['time'][-1], self.time))
         self._history['time'].append(self.time)

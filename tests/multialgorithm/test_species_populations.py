@@ -361,11 +361,11 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             str(context.exception))
 
         history = an_LSP_recording_history.report_history()
-        self.assertEqual(history['time'], [0, next_time])
-        first_specie_history = [1.0, 1.0]
+        self.assertEqual(history['time'], [next_time])
+        first_specie_history = [1.0]
         self.assertEqual(history['population'][first_specie], first_specie_history)
         self.assertIn(
-            '\t'.join(map(lambda x:str(x), [first_specie, 2] + first_specie_history)),
+            '\t'.join(map(lambda x:str(x), [first_specie, 1] + first_specie_history)),
             an_LSP_recording_history.history_debug())
 
         # test numpy array history
@@ -376,8 +376,8 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         compartment_ids = self.compartment_ids
         time_hist, species_counts_hist = an_LSP_recording_history.report_history(numpy_format=True,
             specie_type_ids=specie_type_ids, compartment_ids=compartment_ids)
-        self.assertTrue((time_hist == np.array([0, next_time])).all())
-        for time_idx in [0, 1]:
+        self.assertTrue((time_hist == np.array([next_time])).all())
+        for time_idx in [0]:
             self.assertEqual(species_counts_hist[0, 0, time_idx], first_specie_history[time_idx])
 
     def test_mass(self):
