@@ -22,6 +22,7 @@ from wc_sim.multialgorithm.run_results import RunResults
 from wc_sim.multialgorithm.make_models import MakeModels
 
 
+# todo: fix skipped tests, make sure to test with multiple compartments
 class TestRunResults2(unittest.TestCase):
 
     def setUp(self):
@@ -42,19 +43,16 @@ class TestRunResults2(unittest.TestCase):
     def test_convert_to_concentrations(self):
         run_results = RunResults(self.results_dir)
         # todo: make this a test
-        print("run_results.get('concentrations')", run_results.get('concentrations'))
+        # print("run_results.get('concentrations')", run_results.get('concentrations'))
 
     def test_exceptions(self):
         # put restoration of RunResults.COMPUTED_COMPONENTS in finally so it always runs
         tmp_COMPUTED_COMPONENTS = RunResults.COMPUTED_COMPONENTS
         RunResults.COMPUTED_COMPONENTS = {'test': 'not_a_func'}
         try:
-            # todo: make this report a failure
             with self.assertRaisesRegexp(MultialgorithmError,
                 'in COMPUTED_COMPONENTS is not a function in'):
                 RunResults.prepare_computed_components()
-        except:
-            pass
         finally:
             RunResults.COMPUTED_COMPONENTS = tmp_COMPUTED_COMPONENTS
 

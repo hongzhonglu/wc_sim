@@ -149,7 +149,6 @@ class RunResults(object):
             :obj:`pandas.DataFrame`: the concentrations of this `RunResults`' species
         """
         # todo: return concentrations in all compartments
-        # return self.get('populations') / (Avogadro * self.get('aggregate_states').loc[:, ('c', 'volume')])
         # todo: make sure this works by using volumes != 1
         volumes = self.get('aggregate_states').loc[:, ('c', 'volume')]
         return self.get('populations').iloc[:,:].div(volumes, axis=0) / Avogadro
