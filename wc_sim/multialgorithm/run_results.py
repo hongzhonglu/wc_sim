@@ -10,6 +10,7 @@ import os
 import pandas
 import pickle
 import warnings
+from scipy.constants import Avogadro
 
 from wc_utils.util.misc import as_dict
 from wc_sim.log.checkpoint import Checkpoint
@@ -17,6 +18,9 @@ from wc_sim.core.sim_metadata import SimulationMetadata
 from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 
 
+# todo: have hdf use disk more efficiently; for unknown reasons, in one example
+# hdf uses 4.4M to store the data in 52 pickle files of 8K each
+# the attempt with to_hdf_kwargs does not help
 class RunResults(object):
     """ Store and retrieve combined results of a multialgorithmic simulation run
 
@@ -27,11 +31,20 @@ class RunResults(object):
     """
     # component stored in a RunResults instance and the HDF file it manages
     COMPONENTS = {
-        'populations',          # predicted populations of species at all checkpoint times
-        'aggregate_states',     # predicted aggregate states of the cell over the simulation
-        'observables',          # predicted values of all observables over the simulation
-        'random_states',        # states of the simulation's random number geerators over the simulation
-        'metadata',             # the simulation's global metadata
+        # predicted populations of species at all checkpoint times
+        'populations',
+        # predicted aggregate states of the cell over the simulation
+        'aggregate_states',
+        # predicted values of all observables over the simulation
+        'observables',
+        # states of the simulation's random number geerators over the simulation
+        'random_states',
+        # the simulation's global metadata
+        'metadata',
+    }
+    COMPUTED_COMPONENTS = {
+        # predicted concentrations of species at all checkpoint times
+        'concentrations': 'get_concentrations',
     }
     HDF5_FILENAME = 'run_results.h5'
 
@@ -51,18 +64,19 @@ class RunResults(object):
 
         # else create the HDF file from the stored metadata and sequence of checkpoints
         else:
+            to_hdf_kwargs = dict(complevel=9, complib='blosc:zstd')
 
             # create the HDF file containing the run results
             population_df, observables_df, aggregate_states_df, random_states_s = self.convert_checkpoints()
             # populations
-            population_df.to_hdf(self._hdf_file(), 'populations')
+            population_df.to_hdf(self._hdf_file(), 'populations', **to_hdf_kwargs)
             # observables
-            observables_df.to_hdf(self._hdf_file(), 'observables')
+            observables_df.to_hdf(self._hdf_file(), 'observables', **to_hdf_kwargs)
             # aggregate states
-            aggregate_states_df.to_hdf(self._hdf_file(), 'aggregate_states')
+            aggregate_states_df.to_hdf(self._hdf_file(), 'aggregate_states', **to_hdf_kwargs)
             # todo (Arthur): address performance warning raised by pandas/io/pytables for the next two to_hdf() calls:
             '''
-                /usr/local/lib/python3.6/site-packages/pandas/core/generic.py:1996 PerformanceWarning: 
+                /usr/local/lib/python3.6/site-packages/pandas/core/generic.py:1996 PerformanceWarning:
                 your performance may suffer as PyTables will pickle object types that it cannot
                 map directly to c-types [inferred_type->mixed,key->values] [items->None]
             '''
@@ -71,13 +85,23 @@ class RunResults(object):
                 warnings.simplefilter("ignore")
 
                 # random states
-                random_states_s.to_hdf(self._hdf_file(), 'random_states')
+                random_states_s.to_hdf(self._hdf_file(), 'random_states', **to_hdf_kwargs)
 
                 # metadata
                 metadata_s = self.convert_metadata()
-                metadata_s.to_hdf(self._hdf_file(), 'metadata')
+                metadata_s.to_hdf(self._hdf_file(), 'metadata', **to_hdf_kwargs)
 
             self._load_hdf_file()
+
+    @classmethod
+    def prepare_computed_components(cls):
+        # check and initialize the COMPUTED_COMPONENTS
+        for component, function in cls.COMPUTED_COMPONENTS.items():
+            if hasattr(cls, function):
+                cls.COMPUTED_COMPONENTS[component] = getattr(cls, function)
+            else:
+                raise MultialgorithmError("'{}' in COMPUTED_COMPONENTS is not a function in {}".format(
+                    function, cls.__class__.__name__))
 
     def _hdf_file(self):
         """ Provide the pathname of the HDF5 file storing the combined results
@@ -90,8 +114,13 @@ class RunResults(object):
     def _load_hdf_file(self):
         """ Load run results from the HDF file
         """
-        for component in self.COMPONENTS:
-            self.run_results[component] = pandas.read_hdf(self._hdf_file(), component)
+        try:
+            for component in self.COMPONENTS:
+                self.run_results[component] = pandas.read_hdf(self._hdf_file(), component)
+        except Exception as e:
+            # raise this exception because Pytables, used by pandas for hdf I/O, doesn't
+            # reliably report 'No space left on device'
+            raise MultialgorithmError("Unable to read hdf file: exception {}: disk may be full".format(str(e)))
 
     def get(self, component):
         """ Read and provide the specified `component`
@@ -106,10 +135,24 @@ class RunResults(object):
         Raises:
             :obj:`MultialgorithmError`: if `component` is not an element of `RunResults.COMPONENTS`
         """
-        if component not in RunResults.COMPONENTS:
+        if component not in RunResults.COMPONENTS.union(RunResults.COMPUTED_COMPONENTS):
             raise MultialgorithmError("component '{}' is not an element of {}".format(component,
                 RunResults.COMPONENTS))
+        if component in RunResults.COMPUTED_COMPONENTS:
+            return RunResults.COMPUTED_COMPONENTS[component](self)
         return self.run_results[component]
+
+    def get_concentrations(self):
+        """ Get concentrations
+
+        Returns:
+            :obj:`pandas.DataFrame`: the concentrations of this `RunResults`' species
+        """
+        # todo: return concentrations in all compartments
+        # return self.get('populations') / (Avogadro * self.get('aggregate_states').loc[:, ('c', 'volume')])
+        # todo: make sure this works by using volumes != 1
+        volumes = self.get('aggregate_states').loc[:, ('c', 'volume')]
+        return self.get('populations').iloc[:,:].div(volumes, axis=0) / Avogadro
 
     def convert_metadata(self):
         """ Convert the saved simulation metadata into a pandas series
@@ -169,3 +212,6 @@ class RunResults(object):
             random_states_s[time] = pickle.dumps(checkpoint.random_state)
 
         return (population_df, observables_df, aggregate_states_df, random_states_s)
+
+# check and initialize the COMPUTED_COMPONENTS
+RunResults.prepare_computed_components()
