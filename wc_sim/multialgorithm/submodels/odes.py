@@ -102,8 +102,12 @@ todos:
         use them
 '''
 
+
 class OdeSubmodel(DynamicSubmodel):
-    """
+    """ Use a system of ordinary differential equations to predict the dynamics of chemical species in a container
+
+    To avoid cumulative roundoff errors in event times from repeated addition, event times are
+    computed by multiplying period number times period.
 
     Attributes:
         rate_of_change_expressions (:obj:`list`): a list of coefficient, rate law tuples for each species
@@ -122,8 +126,9 @@ class OdeSubmodel(DynamicSubmodel):
     # todo: enable simultaneous use of multiple OdeSubmodel instances
     using_solver = False
 
+    # todo: provide a dict of options that can pass through Simulate()
     def __init__(self, id, dynamic_model, reactions, species, parameters, dynamic_compartments,
-        local_species_population, time_step):
+        local_species_population, time_step, testing=True):
         """ Initialize an ODE submodel instance.
 
         Args:
@@ -139,6 +144,7 @@ class OdeSubmodel(DynamicSubmodel):
             local_species_population (:obj:`LocalSpeciesPopulation`): the store that maintains this
                 ODE submodel's species population
             time_step (:obj:`float`): time interval between ODE analyses
+            testing (:obj:`bool`, optional): true indicates testing
         """
         super().__init__(id, dynamic_model, reactions, species, parameters, dynamic_compartments,
             local_species_population)
@@ -147,7 +153,10 @@ class OdeSubmodel(DynamicSubmodel):
                 self.id, time_step))
         if 1 < len(self.dynamic_compartments):
             raise MultialgorithmError("OdeSubmodel {}: multiple compartments not supported".format(self.id))
+        # todo: migrate this count and multiply approach to computing up to DynamicSubmodel
         self.time_step = time_step
+        self.time_step_count = 0
+        self.testing = testing
         self.set_up_optimizations()
         self.set_up_ode_submodel()
 
@@ -227,8 +236,8 @@ class OdeSubmodel(DynamicSubmodel):
 
     def set_up_ode_solver(self):
         """Set up the `scikits.odes` ODE solver"""
-        # todo: methods in DynamicSubmodel and LocalSpeciesPopulation to put concentrations directly
-        # into existing np arrays
+        # todo: optimization: methods in DynamicSubmodel and LocalSpeciesPopulation to put
+        # concentrations directly into existing np arrays
         specie_concentrations_dict = self.get_specie_concentrations()
         self.concentrations = np.asarray([specie_concentrations_dict[id] for id in self.species_ids])
         # use CVODE from LLNL's SUNDIALS (https://computation.llnl.gov/projects/sundials)
@@ -240,7 +249,7 @@ class OdeSubmodel(DynamicSubmodel):
         return solver_return
 
     @staticmethod
-    def right_hand_side(time, concentrations, concentration_change_rates, testing=False):
+    def right_hand_side(time, concentrations, concentration_change_rates):
         """Evaluate concentration change rates for all species; called by ODE solver
 
         Args:
@@ -249,7 +258,6 @@ class OdeSubmodel(DynamicSubmodel):
                 same order as `self.species`
             concentration_change_rates (:obj:`numpy.ndarray`): the rate of change of concentrations at
                 time `time`; written by this method
-            testing (:obj:`bool`, optional): if set, raise exception to help testing
 
         Returns:
             :obj:`int`: return 0 to indicate success, 1 to indicate failure;
@@ -262,23 +270,20 @@ class OdeSubmodel(DynamicSubmodel):
             self = OdeSubmodel.instance
 
             # for each specie in `concentrations` sum evaluations of rate laws in self.rate_of_change_expressions
-            parameter_values = self.get_parameter_values()
             species_concentrations = self.get_specie_concentrations()
-            # todo: change when multiple compartments supported
-            volume = self.get_compartment_volume()
 
+            # todo: optimize by using self.calc_reaction_rates()
             for idx, conc in enumerate(np.nditer(concentrations)):
                 specie_rxn_rates = []
                 for coeff, dyn_rate_law in self.rate_of_change_expressions[idx]:
                     specie_rxn_rates.append(coeff * dyn_rate_law.eval(
                         self.time,
-                        parameter_values=parameter_values,
-                        species_concentrations=species_concentrations,
-                        compartment_volume=volume))
+                        parameter_values=self.get_parameter_values(),
+                        species_concentrations=species_concentrations))
                 concentration_change_rates[idx] = sum(specie_rxn_rates)
             return 0
         except Exception as e:
-            if testing:
+            if self.testing:
                 raise MultialgorithmError("OdeSubmodel {}: solver.right_hand_side() failed: '{}'".format(
                     self.id, e))
             return 1
@@ -287,23 +292,23 @@ class OdeSubmodel(DynamicSubmodel):
         """Run the ODE solver for one time step and save its results"""
         ### run the ODE solver
         # re-initialize the solver to include changes in concentrations by other submodels
+        # must be done each time solver.step() is called
         self.set_up_ode_solver()
-        # todo: minimize round-off error for time by counting steps and using multiplication
-        end_time = self.time + self.time_step
+        # minimize round-off error for time by counting steps and multiplying time step * num steps
+        end_time = self.time_step_count * self.time_step
         solution = self.solver.step(end_time)
         if solution.errors.t:
             raise MultialgorithmError("OdeSubmodel {}: odes solver error: '{}' at time {}".format(
                 self.id, solution.message, solution.errors.t))
-        
-        print('solution.values.y.shape', solution.values.y.shape)
+
         ### store results in local_species_population
         '''
         approach
-            pre-compute mean rate of change for the next time step
-            init_pops = initial population at start of this ODE analysis
-                solution.values.y is an np array w shape 1xnum(species)
-            curr_pops = solution.values.y converted to pops
-            pops_change = curr_pops - init_pops
+            pre-compute mean rate of population change for the next time step
+                init_pops = initial population at start of this ODE analysis
+                    solution.values.y is an np array w shape 1xnum(species)
+                curr_pops = solution.values.y converted to pops
+                pops_change = curr_pops - init_pops
 
             rate = pops_change/self.time_step
             map all to dict (pre-allocated)
@@ -316,31 +321,13 @@ class OdeSubmodel(DynamicSubmodel):
 
         # convert concentrations to populations
         curr_pops = self.concentrations_to_populations(solution.values.y)
-        print('curr_pops, init_pops_array', curr_pops, init_pops_array)
         pops_change = curr_pops - init_pops_array
 
         rate = pops_change / self.time_step
-        print('rate', rate)
         for idx, species_id in enumerate(self.species_ids):
-            self.adjustments[species_id] = (0, rate[idx])
+            self.adjustments[species_id] = rate[idx]
         # todo: optimization: optimize LocalSpeciesPopulation to accept arrays
         self.local_species_population.adjust_continuously(self.time, self.adjustments)
-
-        '''
-        first draft:
-        if self.adjust_continuously:
-            rate = pops_change/self.time_step
-            for idx, species_id in enumerate(self.species_ids):
-                self.adjustments[species_id][0] = pops_change[idx]
-                self.adjustments[species_id][1] = rate[idx]
-            self.local_species_population.adjust_continuously(self.time, self.adjustments)
-
-        else:
-            # adjust discretely
-            for idx, species_id in enumerate(self.species_ids):
-                self.adjustments[species_id] = pops_change[idx]
-            self.local_species_population.adjust_discretely(self.time, self.adjustments)
-        '''
 
     # schedule and handle events
     def send_initial_events(self):
@@ -349,10 +336,14 @@ class OdeSubmodel(DynamicSubmodel):
 
     def schedule_next_ode_analysis(self):
         """Schedule the next analysis by this ODE submodel"""
-        # todo: count events to avoid round off error; I think Checkpointing does
-        self.send_event(self.time_step, self, message_types.RunOde())
+        self.send_event_absolute(self.time_step_count * self.time_step, self, message_types.RunOde())
+        self.time_step_count += 1
 
-    def handle_RunOde_msg(self):
-        """Handle a RunOde message"""
+    def handle_RunOde_msg(self, event):
+        """Handle an event containing a RunOde message
+
+        Args:
+            event (:obj:`Event`): a simulation event
+        """
         self.run_ode_solver()
         self.schedule_next_ode_analysis()
