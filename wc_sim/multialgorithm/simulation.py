@@ -174,7 +174,9 @@ class Simulation(object):
                 raise MultialgorithmError("Timestep for time-stepped submodels ({}) must be positive and less than or "
                     "equal to end time".format(args['time_step']))
 
-    def run(self, end_time, results_dir=None, checkpoint_period=None, time_step=1, seed=None):
+    # todo: provide a dict of options that can pass through here to submodel creation
+    def run(self, end_time, results_dir=None, checkpoint_period=None, time_step=1, seed=None,
+        verbose=True):
         """ Run one simulation
 
         Args:
@@ -184,6 +186,7 @@ class Simulation(object):
             time_step (:obj:`float`, optional): time step length of time-stepped submodels (sec)
             seed (:obj:`object`, optional): a seed for the simulation's `numpy.random.RandomState`;
                 if provided, `seed` will reseed the simulator's PRNG
+            verbose (:obj:`bool`, optional): whether to print success output
 
         Returns:
             :obj:`tuple` of (`int`, `str`): number of simulation events, pathname of directory
@@ -233,11 +236,13 @@ class Simulation(object):
         if timestamped_results_dir:
             SimulationMetadata.write_metadata(self.simulation_metadata, timestamped_results_dir)
 
-        print('Simulated {} events'.format(num_events))
+        if verbose:
+            print('Simulated {} events'.format(num_events))
         if timestamped_results_dir:
             # summarize results in an HDF5 file in timestamped_results_dir
             RunResults(timestamped_results_dir)
-            print("Saved checkpoints and run results in '{}'".format(timestamped_results_dir))
+            if verbose:
+                print("Saved checkpoints and run results in '{}'".format(timestamped_results_dir))
             return (num_events, timestamped_results_dir)
         else:
             return (num_events, None)

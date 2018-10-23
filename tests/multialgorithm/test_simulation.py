@@ -27,6 +27,8 @@ from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 TOY_MODEL_FILENAME = os.path.join(os.path.dirname(__file__), 'fixtures', '2_species_1_reaction.xlsx')
 
 
+# todo: change test model so it completes in reasonable time
+@unittest.skip('Too slow')
 class TestSimulation(unittest.TestCase):
 
     def setUp(self):
@@ -121,6 +123,8 @@ class TestSimulation(unittest.TestCase):
                 self.assertTrue(run_results[0].get(component).equals(run_results[1].get(component)))
 
 
+# todo: change test model so it completes in reasonable time
+@unittest.skip('Too slow')
 class TestProcessAndValidateArgs(unittest.TestCase):
 
     def setUp(self):
