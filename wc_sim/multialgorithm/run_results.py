@@ -21,6 +21,7 @@ from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 # todo: have hdf use disk more efficiently; for unknown reasons, in one example
 # hdf uses 4.4M to store the data in 52 pickle files of 8K each
 # the attempt with to_hdf_kwargs does not help
+# todo: also, Jonathan finds that convert_checkpoints() runs slowly
 class RunResults(object):
     """ Store and retrieve combined results of a multialgorithmic simulation run
 
