@@ -48,6 +48,7 @@ class SpeciesPopulationError(Error):
         super().__init__(message)
 
 
+# todo: add time attribute so NegativePopulationErrors is easier to debug, perhaps do so for all MultialgorithmErrors
 class NegativePopulationError(Error):
     """ Exception raised when a negative specie population is predicted
 
