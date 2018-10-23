@@ -1348,7 +1348,7 @@ class DynamicSpecie(object):
                         self.last_population, interpolation, time - self.continuous_time)
             float_copy_number = self.last_population + interpolation
             self.update_last_read_time(time)
-            # todo: make sure this cannot return a negative number:
+            # this cannot return a negative number
             return self.random_state.round(float_copy_number)
 
     def __str__(self):
