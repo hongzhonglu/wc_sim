@@ -26,6 +26,7 @@ from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 from wc_sim.multialgorithm.simulation import Simulation
 from wc_sim.multialgorithm.run_results import RunResults
 from wc_sim.multialgorithm.config import core as config_core_multialgorithm
+from wc_sim.multialgorithm.make_models import MakeModels
 config_multialgorithm = config_core_multialgorithm.get_config()['wc_sim']['multialgorithm']
 
 
@@ -52,26 +53,6 @@ class ValidationError(Error):
 
 class WcSimValidationWarning(UserWarning):
     """ `wc_sim` Validation warning """
-    pass
-
-
-class SubmodelValidator(object):
-    """ Validate dynamic behavior of a single `wc_sim` submodel """
-    pass
-
-
-class SsaValidator(SubmodelValidator):
-    """ Validate dynamic behavior of the `wc_sim` SSA submodel """
-    pass
-
-
-class FbaValidator(SubmodelValidator):
-    """ Validate dynamic behavior of the `wc_sim` FBA submodel """
-    pass
-
-
-class OdeValidator(SubmodelValidator):
-    """ Validate dynamic behavior of the `wc_sim` ODE submodel """
     pass
 
 
@@ -244,7 +225,6 @@ class ResultsComparator(object):
         infs = np.full(np_array.shape, float('inf'))
         return np.where(np_array != 0, np_array, infs)
 
-    # todo: check concentrations too
     def differs(self):
         """ Evaluate whether simulation runs(s) differ from their expected species population prediction(s)
 
@@ -255,11 +235,11 @@ class ResultsComparator(object):
         differing_values = []
         if self.validation_test_reader.test_case_type == ValidationTestCaseType.CONTINUOUS_DETERMINISTIC:
             kwargs = self.prepare_tolerances()
-            populations_df = self.simulation_run_results.get('populations')
+            concentrations_df = self.simulation_run_results.get('concentrations')
             # for each prediction, determine whether its trajectory is close enough to the expected predictions
             for species_type in self.validation_test_reader.settings['amount']:
-                if not np.allclose(self.validation_test_reader.expected_predictions_df[species_type],
-                    populations_df[species_type], **kwargs):
+                if not np.allclose(self.validation_test_reader.expected_predictions_df[species_type].values,
+                    concentrations_df[species_type].values, **kwargs):
                     differing_values.append(species_type)
             return differing_values or False
 
@@ -276,7 +256,7 @@ class ResultsComparator(object):
 
             ### test means ###
             mean_range = self.validation_test_reader.settings['meanRange']
-            n_runs = len(self.simulation_run_results)
+            self.n_runs = n_runs = len(self.simulation_run_results)
 
             times = self.simulation_run_results[0].get('populations').index
             n_times = len(times)
@@ -317,26 +297,19 @@ class ResultsComparator(object):
 class CaseValidator(object):
     """ Validate a test case """
     def __init__(self, test_cases_root_dir, test_case_type, test_case_num,
-        default_num_stochastic_runs=config_multialgorithm['num_ssa_validation_sim_runs']):
+        default_num_stochastic_runs=config_multialgorithm['num_ssa_validation_sim_runs'],
+        time_step_factor=None):
         # read model, config and expected predictions
         self.test_case_dir = os.path.join(test_cases_root_dir, TEST_CASE_TYPE_TO_DIR[test_case_type],
             test_case_num)
         self.validation_test_reader = ValidationTestReader(test_case_type, self.test_case_dir, test_case_num)
         self.validation_test_reader.run()
         self.default_num_stochastic_runs = default_num_stochastic_runs
+        self.time_step_factor = time_step_factor
 
     def validate_model(self, num_discrete_stochastic_runs=None, discard_run_results=True, plot_file=None):
         """ Validate a model
         """
-        # todo: make this work for CONTINUOUS_DETERMINISTIC models
-        '''
-            todo: retry on failure
-                if failure, retry "evaluate whether mean of simulation trajectories match expected trajectory"
-                    # simulations generating the correct trajectories will fail validation (100*(p-value threshold)) percent of the time
-                if failure again, report failure    # assuming p-value << 1, two failures indicates likely errors
-        '''
-        # todo: convert to probabilistic test with multiple runs and p-value
-        ## 1. run simulation
         # check settings
         required_settings = ['duration', 'steps']
         settings = self.validation_test_reader.settings
@@ -351,18 +324,31 @@ class CaseValidator(object):
         if 'start' in settings and settings['start'] != 0:
             raise ValidationError("non-zero start setting ({}) not supported".format(settings['start']))
 
-        # run simulation
+        # prepare for simulation
         self.tmp_results_dir = tmp_results_dir = tempfile.mkdtemp()
         simul_kwargs = dict(end_time=settings['duration'],
             checkpoint_period=settings['duration']/settings['steps'],
-            results_dir=tmp_results_dir)
+            results_dir=tmp_results_dir,
+            verbose= False)
 
+        ## 1. run simulation
         if self.validation_test_reader.test_case_type == ValidationTestCaseType.CONTINUOUS_DETERMINISTIC:
             simulation = Simulation(self.validation_test_reader.model)
+            factor = 1
+            if self.time_step_factor is not None:
+                factor = self.time_step_factor
+            simul_kwargs['time_step'] = factor * settings['duration']/settings['steps']
             _, results_dir = simulation.run(**simul_kwargs)
-            simulation_run_results = RunResults(results_dir)
+            self.simulation_run_results = RunResults(results_dir)
 
         if self.validation_test_reader.test_case_type == ValidationTestCaseType.DISCRETE_STOCHASTIC:
+            '''
+            todo: retry on failure
+                if failure, retry "evaluate whether mean of simulation trajectories match expected trajectory"
+                    # simulations generating the correct trajectories will fail validation (100*(p-value threshold)) percent of the time
+                if failure again, report failure    # assuming p-value << 1, two failures indicates likely errors
+            '''
+            # todo: convert to probabilistic test with multiple runs and p-value
             # make multiple simulation runs with different random seeds
             if num_discrete_stochastic_runs is not None:
                 num_runs = num_discrete_stochastic_runs
@@ -398,7 +384,7 @@ class CaseValidator(object):
         """
         mdl = self.validation_test_reader.model
         summary = ['Model Summary:']
-        summary.append("model {}: {}".format(mdl.id, mdl.name))
+        summary.append("model {}:\n    {}".format(mdl.id, mdl.name))
         for cmpt in mdl.compartments:
             summary.append("compartment {}: {}, init. vol. {}".format(cmpt.id, cmpt.name,
                 cmpt.initial_volume))
@@ -422,19 +408,18 @@ class CaseValidator(object):
             summary.append("Failing species types: {}".format(', '.join(self.comparison_result)))
         else:
             summary.append('All species types validate')
-        summary.append("Num simul runs: {}".format(self.num_runs))
+        if hasattr(self, 'num_runs'):
+            summary.append("Num simul runs: {}".format(self.num_runs))
         summary.append("Test case type: {}".format(self.validation_test_reader.test_case_type.name))
         summary.append("Test case number: {}".format(self.validation_test_reader.test_case_num))
+        summary.append("Time step factor: {}".format(self.time_step_factor))
         return summary
 
-    def plot_model_validation(self, plot_file):
+    def plot_model_validation(self, plot_file, max_runs_to_plot=100, presentation_qual=True):
         """Plot a model validation run
         """
-        # todo: make this work for CONTINUOUS_DETERMINISTIC models
+        # todo: configure max_runs_to_plot in config file
         # todo: use matplotlib 3; use the more flexible OO API instead of pyplot
-        # todo: optional for actual pops:(may be too many); alternatively a random pct of actuals, or the density of actuals
-        times = self.simulation_run_results[0].get('populations').index
-
         num_species_types = len(self.validation_test_reader.settings['amount'])
         if num_species_types == 1:
             n_rows = 1
@@ -450,45 +435,86 @@ class CaseValidator(object):
             print('cannot plot more than 4 species_types')
             return
         plot_num = 1
-        for species_type in self.validation_test_reader.settings['amount']:
-            plt.subplot(n_rows, n_cols, plot_num)
-            plot_num += 1
+        if self.validation_test_reader.test_case_type == ValidationTestCaseType.CONTINUOUS_DETERMINISTIC:
+            times = self.simulation_run_results.get('concentrations').index
+            for species_type in self.validation_test_reader.settings['amount']:
+                plt.subplot(n_rows, n_cols, plot_num)
 
-            # plot mean simulation pop
-            model_mean, = plt.plot(times, self.results_comparator.simulation_pop_means[species_type], 'g-')
+                # plot expected predictions
+                expected_kwargs = dict(color='red', linewidth=1.2)
+                expected_mean_df = self.validation_test_reader.expected_predictions_df.loc[:, species_type]
+                correct_mean, = plt.plot(times, expected_mean_df.values, **expected_kwargs)
 
-            # plot simulation pops
-            for rr in self.simulation_run_results:
-                pop_time_series = rr.get('populations').loc[:, species_type]
-                simul_pops, = plt.plot(times, pop_time_series, 'b-', linewidth=0.1)
+                # plot simulation pops
+                # plot second, so appears on top, and narrower width so expected shows
+                pop_time_series = self.simulation_run_results.get('concentrations').loc[:, species_type]
+                simul_pops, = plt.plot(times, pop_time_series, 'b-', linewidth=0.8)
 
-            # plot expected predictions
-            expected_mean_df = self.validation_test_reader.expected_predictions_df.loc[:, species_type+'-mean']
-            correct_mean, = plt.plot(times, expected_mean_df.values, 'r-')
-            # mean +/- 3 sd
-            expected_sd_df = self.validation_test_reader.expected_predictions_df.loc[:, species_type+'-sd']
-            kwargs = dict(linewidth=0.4, color='brown')
-            correct_mean_plus_3sd, = plt.plot(times, expected_mean_df.values + 3 * expected_sd_df, **kwargs)
-            correct_mean_minus_3sd, = plt.plot(times, expected_mean_df.values - 3 * expected_sd_df, **kwargs)
+                plt.ylabel('{} (M/L)'.format(species_type), fontsize=10)
+                plt.xlabel('time (s)', fontsize=10)
+                plt.legend((simul_pops, correct_mean),
+                    ('{} simul run'.format(species_type), 'correct'),
+                    loc='lower left', fontsize=5)
+                plot_num += 1
 
-            plt.ylabel('population', fontsize=9)
-            plt.xlabel('time (s)', fontsize=9)
-            plt.legend((simul_pops, model_mean, correct_mean, correct_mean_plus_3sd),
-                ('{} simul runs'.format(species_type), '{} simul mean'.format(species_type), 'correct mean',
-                    '3 sd from correct mean'),
-                loc='lower left', fontsize=7)
+        if self.validation_test_reader.test_case_type == ValidationTestCaseType.DISCRETE_STOCHASTIC:
+            times = self.simulation_run_results[0].get('populations').index
+
+            for species_type in self.validation_test_reader.settings['amount']:
+                plt.subplot(n_rows, n_cols, plot_num)
+
+                # plot simulation pops
+                # todo: try making individual runs visible by slightly varying color and/or width
+                for rr in self.simulation_run_results[:max_runs_to_plot]:
+                    pop_time_series = rr.get('populations').loc[:, species_type]
+                    simul_pops, = plt.plot(times, pop_time_series, 'b-', linewidth=0.1)
+
+                # plot expected predictions
+                expected_kwargs = dict(color='red', linewidth=1)
+                expected_mean_df = self.validation_test_reader.expected_predictions_df.loc[:, species_type+'-mean']
+                correct_mean, = plt.plot(times, expected_mean_df.values, **expected_kwargs)
+                # mean +/- 3 sd
+                expected_kwargs['linestyle'] = 'dashed'
+                expected_sd_df = self.validation_test_reader.expected_predictions_df.loc[:, species_type+'-sd']
+                # todo: take range -3, +3 should be taken from settings data
+                correct_mean_plus_3sd, = plt.plot(times, expected_mean_df.values + 3 * expected_sd_df / math.sqrt(self.results_comparator.n_runs),
+                    **expected_kwargs)
+                correct_mean_minus_3sd, = plt.plot(times, expected_mean_df.values - 3 * expected_sd_df / math.sqrt(self.results_comparator.n_runs),
+                    **expected_kwargs)
+
+                # plot mean simulation pop
+                model_kwargs = dict(color='green')
+                model_mean, = plt.plot(times, self.results_comparator.simulation_pop_means[species_type], **model_kwargs)
+
+                plt.ylabel('{} (molecules)'.format(species_type), fontsize=10)
+                plt.xlabel('time (s)', fontsize=10)
+                runs_note = ''
+                if max_runs_to_plot < len(self.simulation_run_results):
+                    runs_note = " ({} of {} runs)".format(max_runs_to_plot, len(self.simulation_run_results))
+                if not presentation_qual:
+                    plt.legend((simul_pops, model_mean, correct_mean, correct_mean_plus_3sd),
+                        ('{} simul runs{}'.format(species_type, runs_note), '{} simul mean'.format(species_type),
+                            'correct mean', '+/- 3Z thresholds'),
+                        loc='lower left', fontsize=5)
+                plot_num += 1
 
         summary = self.get_model_summary()
         middle = len(summary)//2
         x_pos = 0.1
         y_pos = 0.9
         for lb, ub in [(0, middle), (middle, len(summary))]:
-            text = plt.figtext(x_pos, y_pos, '\n'.join(summary[lb:ub]), fontsize=5)
+            if not presentation_qual:
+                text = plt.figtext(x_pos, y_pos, '\n'.join(summary[lb:ub]), fontsize=4)
             # todo: position text automatically
             x_pos += 0.35
         test_case_summary = self.get_test_case_summary()
-        plt.figtext(0.8, y_pos, '\n'.join(test_case_summary), fontsize=5)
+        if not presentation_qual:
+            plt.figtext(0.8, y_pos, '\n'.join(test_case_summary), fontsize=4)
 
+        if presentation_qual:
+            plt.suptitle('plt.suptitle()')
+            plt.title('plt.title()')
+        plt.tight_layout()
         fig = plt.gcf()
         fig.savefig(plot_file)
         plt.close(fig)
@@ -520,7 +546,13 @@ class ValidationSuite(object):
         if plot_dir and not os.path.isdir(plot_dir):
             raise ValidationError("cannot open plot_dir: '{}'".format(plot_dir))
         self.plot_dir = plot_dir
+        self._reset_results()
+
+    def _reset_results(self):
         self.results = []
+
+    def get_results(self):
+        return self.results
 
     def _record_result(self, case_type_sub_dir, case_num, result_type, error=None):
         """Record a result_type
@@ -533,11 +565,13 @@ class ValidationSuite(object):
         else:
             self.results.append(ValidationRunResult(self.cases_dir, case_type_sub_dir, case_num, result_type))
 
-    def _run_test(self, case_type_name, case_num, num_stochastic_runs=None):
+    def _run_test(self, case_type_name, case_num, num_stochastic_runs=None, time_step_factor=None,
+        verbose=False):
         """Run one test case and report the result
         """
         try:
-            case_validator = CaseValidator(self.cases_dir, case_type_name, case_num)
+            case_validator = CaseValidator(self.cases_dir, case_type_name, case_num,
+                time_step_factor=time_step_factor)
         except:
             tb = traceback.format_exc()
             self._record_result(case_type_name, case_num, ValidationResultType.CASE_UNREADABLE, tb)
@@ -550,6 +584,11 @@ class ValidationSuite(object):
             if num_stochastic_runs:
                 kwargs['num_discrete_stochastic_runs'] = num_stochastic_runs
             # todo: timeout excessively long validation runs
+            if verbose:
+                notice = "Validating {} case {}".format(case_type_name, case_num)
+                if num_stochastic_runs is not None:
+                    notice += " with {} runs".format(num_stochastic_runs)
+                print(notice)
             validation_result = case_validator.validate_model(**kwargs)
         except:
             tb = traceback.format_exc()
@@ -560,7 +599,8 @@ class ValidationSuite(object):
         else:
             self._record_result(case_type_name, case_num, ValidationResultType.CASE_VALIDATED)
 
-    def run(self, test_case_type_name=None, cases=None, num_stochastic_runs=None):
+    def run(self, test_case_type_name=None, cases=None, num_stochastic_runs=None, time_step_factor=None,
+        verbose=True):
         """Run all requested test cases
         """
         if isinstance(cases, str):
@@ -573,11 +613,14 @@ class ValidationSuite(object):
             if cases is None:
                 cases = os.listdir(os.path.join(self.cases_dir, TEST_CASE_TYPE_TO_DIR[test_case_type_name]))
             for case_num in cases:
-                self._run_test(test_case_type_name, case_num, num_stochastic_runs=num_stochastic_runs)
+                self._run_test(test_case_type_name, case_num, num_stochastic_runs=num_stochastic_runs,
+                    time_step_factor=time_step_factor, verbose=verbose)
         else:
             for validation_test_case_type in ValidationTestCaseType:
                 for case_num in os.listdir(os.path.join(self.cases_dir, TEST_CASE_TYPE_TO_DIR[validation_test_case_type.name])):
-                    self._run_test(validation_test_case_type.name, case_num, num_stochastic_runs=num_stochastic_runs)
+                    self._run_test(validation_test_case_type.name, case_num,
+                        num_stochastic_runs=num_stochastic_runs, time_step_factor=time_step_factor,
+                        verbose=verbose)
         return self.results
 
 

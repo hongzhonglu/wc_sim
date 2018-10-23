@@ -277,7 +277,7 @@ class MakeModels(object):
             summary.append("    {}: MW: {}".format(st.id, st.molecular_weight))
         summary.append("submodels:")
         for sm in model.get_submodels():
-            summary.append("    {}: in {}".format(sm.id, sm.compartment.id))
+            summary.append("    {}: in {} runs {}".format(sm.id, sm.compartment.id, sm.algorithm.name))
             summary.append("    reactions and rate laws:")
             for rxn in sm.reactions:
                 summary.append("        {}: {}, {}".format(rxn.id,
