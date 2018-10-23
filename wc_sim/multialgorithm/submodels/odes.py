@@ -84,22 +84,12 @@ todos:
             ../sundials-2.7.0
             make install
             popd > /dev/null
-            # todo: test SUNDIALS
 
             # install odes
             pip install scikits.odes
         update wc-env (name?) Docker image for Odes:
             add Odes prerequisites commands to wc-env Dockerfile
             test it
-
-    test Odes using its jupyter notebook
-    finish writing this module
-    write test_odes.py
-    use some SMBL 'semantic' tests:
-        review some
-        choose some to use
-        expand validate.py to use them
-        use them
 '''
 
 
