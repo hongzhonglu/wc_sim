@@ -1334,6 +1334,7 @@ class DynamicSpecie(object):
                 adjustment or discrete adjustment
             NegativePopulationError: if interpolation predicts a negative population
         """
+        # todo: dont round population before calculating concentrations
         self.validate_read_time(time, 'get_population')
         if not self.modeled_continuously:
             self.update_last_read_time(time)
