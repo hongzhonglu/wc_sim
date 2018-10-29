@@ -665,12 +665,13 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         self._update_access_times(time, specie_id_in_set)
         return self._population[specie_id].get_population(time)
 
-    def read(self, time, species=None):
+    def read(self, time, species=None, round=True):
         """ Read the predicted population of a list of species at simulation time `time`
 
         Args:
             time (:obj:`float`): the time at which the population should be estimated
             species (:obj:`set`, optional): identifiers of the species to read; if not supplied, read all species
+            round (:obj:`bool`, optional): if not `round` then do not round the populations to integers
 
         Returns:
             species counts: dict: species_id -> copy_number; the predicted copy number of each
@@ -684,7 +685,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         self._check_species(time, species)
         self.time = time
         self._update_access_times(time, species)
-        return {specie:self._population[specie].get_population(time) for specie in species}
+        return {specie:self._population[specie].get_population(time, round=round) for specie in species}
 
     def adjust_discretely(self, time, adjustments):
         """ A discrete submodel adjusts the population of a set of species at simulation time `time`
@@ -734,7 +735,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
 
         # record simulation state history
         # TODO(Arthur): maybe also do it in adjust_discretely(); better, separately control its periodicity
-        if self._recording_history(): self._record_history()
+        # if self._recording_history(): self._record_history()
         errors = []
         for specie_id, population_slope in population_slopes.items():
             try:
@@ -858,7 +859,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             :obj:`SpeciesPopulationError`: if the current time is not greater than the previous time at which the
             history was recorded.
         """
-        if self._history['time'] and not self._history['time'][-1] < self.time:
+        if self._history['time'] and self.time < self._history['time'][-1]:
             raise SpeciesPopulationError("time of previous _record_history() ({}) not less than current time ({})".format(
                 self._history['time'][-1], self.time))
         self._history['time'].append(self.time)
@@ -1304,7 +1305,7 @@ class DynamicSpecie(object):
         self.update_last_adjustment_time(time)
         return self.get_population(time)
 
-    def get_population(self, time):
+    def get_population(self, time, round=True):
         """ Provide the specie's current population
 
         If one of the submodel(s) predicting the specie's population is a continuous-time model,
@@ -1324,7 +1325,8 @@ class DynamicSpecie(object):
         adjustment operations may **NOT** return a sequence of equal population values.*
 
         Args:
-            time (number): the current simulation time
+            time (:obj:`float`): the current simulation time
+            round (:obj:`bool`, optional): if not `round` then do not round the populations to integers
 
         Returns:
             int: an integer approximation of the specie's adjusted population
@@ -1338,6 +1340,7 @@ class DynamicSpecie(object):
         self.validate_read_time(time, 'get_population')
         if not self.modeled_continuously:
             self.update_last_read_time(time)
+            # todo: I think round isn't needed here
             return self.random_state.round(self.last_population)
         else:
             interpolation=0
@@ -1349,8 +1352,11 @@ class DynamicSpecie(object):
                         self.last_population, interpolation, time - self.continuous_time)
             float_copy_number = self.last_population + interpolation
             self.update_last_read_time(time)
-            # this cannot return a negative number
-            return self.random_state.round(float_copy_number)
+            # if not round then do not round the return value to an integer
+            if round:
+                # this cannot return a negative number
+                return self.random_state.round(float_copy_number)
+            return float_copy_number
 
     def __str__(self):
         if self.modeled_continuously:

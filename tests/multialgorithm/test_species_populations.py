@@ -335,6 +335,7 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         self.assertIn("adjust_discretely error(s) at time {}".format(time), str(context.exception))
         self.assertIn("negative population predicted", str(context.exception))
 
+    @unittest.skip("stop recording history in LocalSpeciesPopulation; checkpointing is a better approach")
     def test_history(self):
 
         an_LSP_wo_recording_history = LocalSpeciesPopulation('test',
@@ -515,6 +516,7 @@ class TestDynamicSpecie(unittest.TestCase):
 
     def test_specie(self):
 
+        # todo: make tests more obvious; use keyword arguments, keep only necessary tests
         # DynamicSpecies modeled only by discrete submodel(s)
         s1 = DynamicSpecie('specie', self.random_state, 10)
         self.assertEqual(s1.get_population(0), 10)
@@ -526,6 +528,11 @@ class TestDynamicSpecie(unittest.TestCase):
         # DynamicSpecies modeled by both continuous and discrete
         s2 = DynamicSpecie('specie_3', self.random_state, 2, modeled_continuously=True)
         self.assertEqual(s2.discrete_adjustment(3, 4), 5)
+
+        # ensure that round=False can return non-integer population
+        s2.continuous_adjustment(0.5, 6)
+        self.assertIn(s2.get_population(7), {5, 6})
+        self.assertEqual(s2.get_population(7, round=False), 5.5)
 
         s3 = DynamicSpecie('specie2', self.random_state, 10)
         self.assertEqual("specie_name: specie2; last_population: 10", str(s3))
