@@ -517,46 +517,54 @@ class TestDynamicSpecie(unittest.TestCase):
 
     def test_specie(self):
 
-        # todo: make tests more obvious; use keyword arguments, keep only necessary tests
         # DynamicSpecies modeled only by discrete submodel(s)
-        s1 = DynamicSpecie('specie', self.random_state, 10)
-        self.assertEqual(s1.get_population(0), 10)
-        self.assertEqual(s1.discrete_adjustment(0, 1), 11)
-        self.assertEqual(s1.get_population(1), 11)
-        self.assertEqual(s1.discrete_adjustment(1, -1), 10)
-        self.assertEqual(s1.get_population(2), 10)
+        pop = 10
+        s1 = DynamicSpecie('specie', self.random_state, pop)
+        self.assertEqual(s1.get_population(0), pop)
+        pop += 1
+        self.assertEqual(s1.discrete_adjustment(0, 1), pop)
+        self.assertEqual(s1.get_population(1), pop)
+        pop -= 1
+        self.assertEqual(s1.discrete_adjustment(1, -1), pop)
+        self.assertEqual(s1.get_population(2), pop)
 
         # DynamicSpecies modeled by both continuous and discrete
-        s2 = DynamicSpecie('specie_3', self.random_state, 2, modeled_continuously=True)
-        self.assertEqual(s2.discrete_adjustment(4, 3), 5)
+        pop = 2
+        s2 = DynamicSpecie('specie_3', self.random_state, pop, modeled_continuously=True)
+        pop += 3
+        self.assertEqual(s2.discrete_adjustment(4, 3), pop)
 
         # ensure that round=False can return non-integer population
         s2.continuous_adjustment(6, 0.5)
-        self.assertIn(s2.get_population(7), {5, 6})
-        self.assertEqual(s2.get_population(7, round=False), 5.5)
+        self.assertIn(s2.get_population(7), {pop, pop+1})
+        pop += 0.5
+        self.assertEqual(s2.get_population(7, round=False), pop)
 
-        s3 = DynamicSpecie('specie2', self.random_state, 10)
-        self.assertEqual("specie_name: specie2; last_population: 10", str(s3))
-        self.assertRegex(s3.row(), 'specie2\t10.*')
+        pop = 10
+        s3 = DynamicSpecie('specie2', self.random_state, pop)
+        self.assertEqual("specie_name: specie2; last_population: {}".format(pop), str(s3))
+        self.assertRegex(s3.row(), 'specie2\t{}.*'.format(pop))
 
-        s4 = DynamicSpecie('specie', self.random_state, 10, modeled_continuously=True)
-        self.assertEqual("specie_name: specie; last_population: 10; continuous_time: None; "
-            "population_slope: None", str(s4))
-        self.assertRegex(s4.row(), '^specie\t10\..*$')
-        s4.continuous_adjustment(3, 2)
-        self.assertRegex(s4.row(), '^specie\t10\..*\t3\..*\t2\..*$')
+        s4 = DynamicSpecie('specie', self.random_state, pop, modeled_continuously=True)
+        self.assertEqual("specie_name: specie; last_population: {}; continuous_time: None; "
+            "population_slope: None".format(pop), str(s4))
+        self.assertRegex(s4.row(), '^specie\t{}\..*$'.format(pop))
+        time = 3
+        slope = 2
+        s4.continuous_adjustment(time, slope)
+        self.assertRegex(s4.row(), '^specie\t{}\..*\t{}\..*\t{}\..*$'.format(pop, time, slope))
+
+        now = 4
+        pop += slope * (now - time)
+        self.assertEqual(s4.continuous_adjustment(now, 1), pop)
 
         with self.assertRaisesRegexp(SpeciesPopulationError,
             re.escape("continuous_adjustment(): adjustment_time is earlier than latest prior adjustment")):
             s4.continuous_adjustment(0, 0)
 
-        self.assertEqual(s4.continuous_adjustment(4, 1), 12)
-
         # ensure that continuous_adjustment() returns an integral population
         s4.continuous_adjustment(6, 0.5)
-        time = 7
-        self.assertEqual(s4.last_population + s4.population_slope * (time - s4.continuous_time), 14.5)
-        adjusted_pop = s4.get_population(time)
+        adjusted_pop = s4.get_population(7)
         self.assertEqual(int(adjusted_pop), adjusted_pop)
 
         self.assertRegex(DynamicSpecie.heading(), 'specie_name\t.*')
