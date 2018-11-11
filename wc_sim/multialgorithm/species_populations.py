@@ -671,7 +671,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         Args:
             time (:obj:`float`): the time at which the population should be estimated
             species (:obj:`set`, optional): identifiers of the species to read; if not supplied, read all species
-            round (:obj:`bool`, optional): if not `round` then do not round the populations to integers
+            round (:obj:`bool`, optional): if `round` then round the populations to integers
 
         Returns:
             species counts: dict: species_id -> copy_number; the predicted copy number of each
@@ -705,7 +705,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         errors = []
         for specie in adjustments:
             try:
-                self._population[specie].discrete_adjustment(adjustments[specie], self.time)
+                self._population[specie].discrete_adjustment(self.time, adjustments[specie])
                 self._update_access_times(time, {specie})
                 self.log_event('discrete_adjustment', self._population[specie])
             except NegativePopulationError as e:
@@ -739,7 +739,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         errors = []
         for specie_id, population_slope in population_slopes.items():
             try:
-                self._population[specie_id].continuous_adjustment(population_slope, time)
+                self._population[specie_id].continuous_adjustment(time, population_slope)
                 self._update_access_times(time, [specie_id])
                 self.log_event('continuous_adjustment', self._population[specie_id])
             except (SpeciesPopulationError, NegativePopulationError) as e:
@@ -1136,8 +1136,8 @@ class DynamicSpecie(object):
     `discrete_adjustment()` and `continuous_adjustment()`, respectively. These adjustments take the
     following forms,
 
-    * `discrete_adjustment(population_change, time)`
-    * `continuous_adjustment(population_slope, time)`
+    * `discrete_adjustment(time, population_change)`
+    * `continuous_adjustment(time, population_slope)`
 
     where `population_change` is the increase or decrease in the specie's population, `time` is the
     time at which that change takes place, and `population_slope` is the predicted future rate of change of the
@@ -1183,11 +1183,11 @@ class DynamicSpecie(object):
             reads in the past
         last_read_time (:obj:`float`): the time of the latest read; used to prevent prior adjustments
     """
+    # TODO(Arthur): fix docstrings: type names, check output
     # use __slots__ to save space
     __slots__ = ['specie_name', 'random_state', 'last_population', 'modeled_continuously', 'population_slope',
         'continuous_time', 'last_adjustment_time', 'last_read_time']
 
-    # todo: embed time more deeply in a DynamicSpecie -- save a start time for all types of submodels
     def __init__(self, specie_name, random_state, initial_population, modeled_continuously=False):
         """ Initialize a specie object, defaulting to a simulation time start time of 0
 
@@ -1196,10 +1196,14 @@ class DynamicSpecie(object):
                 reporting, logging, debugging, etc.
             random_state (:obj:`numpy.random.RandomState`): a shared PRNG
             initial_population (int): non-negative number; initial population of the specie
-            modeled_continuously (bool, optional): whether this species is modeled by a continuous submodel;
+            modeled_continuously (bool, optional): whether a continuous submodel models this species;
                 default=`False`
         """
-        assert 0 <= initial_population, '__init__(): population should be >= 0'
+        assert 0 <= initial_population, "DynamicSpecie '{}': population should be >= 0".format(specie_name)
+        # if a population is not modeled continuously then it must be a non-negative integer
+        assert modeled_continuously or float(initial_population).is_integer(), \
+            "DynamicSpecie '{}': initial discretely modeled population must be a non-negative integer, but {} isn't".format(
+                specie_name, initial_population)
         self.specie_name = specie_name
         self.random_state = random_state
         self.last_population = initial_population
@@ -1211,14 +1215,33 @@ class DynamicSpecie(object):
         self.last_adjustment_time = -float('inf')
         self.last_read_time = -float('inf')
 
-    def update_last_adjustment_time(self, adjustment_time):
+    def _update_last_adjustment_time(self, adjustment_time):
+        """ Advance the last adjustment time to `adjustment_time`
+
+        Args:
+            adjustment_time (:obj:`float`): the time at which the population is being adjusted
+        """
         self.last_adjustment_time = max(self.last_adjustment_time, adjustment_time)
 
-    def update_last_read_time(self, read_time):
+    def _update_last_read_time(self, read_time):
+        """ Advance the last read time to `read_time`
+
+        Args:
+            read_time (:obj:`float`): the time at which the population is being read
+        """
         self.last_read_time = max(self.last_read_time, read_time)
 
-    def validate_adjustment_time(self, adjustment_time, method):
-        # error if `adjustment_time` is earlier than any prior adjustment or any prior read
+    def _validate_adjustment_time(self, adjustment_time, method):
+        """ Raise an exception if `adjustment_time` is too early
+
+        Args:
+            adjustment_time (:obj:`float`): the time at which the population is being adjusted
+            method (:obj:`str`): name of the method making the adjustment
+
+        Raises:
+            :obj:`SpeciesPopulationError`: if `adjustment_time` is earlier than latest prior adjustment,
+                 or if adjustment_time is earlier than latest prior read
+        """
         if adjustment_time < self.last_adjustment_time:
             raise SpeciesPopulationError(
                 "{}(): adjustment_time is earlier than latest prior adjustment: "
@@ -1228,23 +1251,31 @@ class DynamicSpecie(object):
                 "{}(): adjustment_time is earlier than latest prior read: "
                 "{:.2f} < {:.2f}".format(method, adjustment_time, self.last_read_time))
 
-    def validate_read_time(self, read_time, method):
-        # error if `read_time` is earlier than any previous adjustment
+    def _validate_read_time(self, read_time, method):
+        """ Raise an exception if `read_time` is too early
+
+        Args:
+            read_time (:obj:`float`): the time at which the population is being read
+            method (:obj:`str`): name of the method making the read
+
+        Raises:
+            :obj:`SpeciesPopulationError`: if `read_time` is earlier than latest prior adjustment
+        """
         if read_time < self.last_read_time:
             raise SpeciesPopulationError(
                 "{}(): read_time is earlier than latest prior adjustment: "
                 "{:.2f} < {:.2f}".format(method, read_time, self.last_adjustment_time))
 
-    def discrete_adjustment(self, population_change, time):
+    def discrete_adjustment(self, time, population_change):
         """ Make a discrete adjustment of the specie's population
 
         A discrete-time submodel, such as the stochastic simulation algorithm (SSA), must use this
         method to adjust the specie's population.
 
         Args:
-            population_change (number): the modeled increase or decrease in the specie's population
             time (number): the simulation time at which the predicted change occurs; this time is
                 used by `get_population` to interpolate continuous-time predictions between integrations.
+            population_change (number): the modeled increase or decrease in the specie's population
 
         Returns:
             int: an integer approximation of the specie's adjusted population
@@ -1253,16 +1284,19 @@ class DynamicSpecie(object):
             NegativePopulationError: if the predicted population at `time` is negative or
             if decreasing the population by `population_change` would make the population negative
         """
-        self.validate_adjustment_time(time, 'discrete_adjustment')
+        assert float(population_change).is_integer(), \
+            "DynamicSpecie '{}': population_change must be an integer, but {} isn't".format(
+                self.specie_name, population_change)
+        self._validate_adjustment_time(time, 'discrete_adjustment')
         current_population = self.get_population(time)
         if current_population + population_change < 0:
             raise NegativePopulationError('discrete_adjustment', self.specie_name,
                 self.last_population, population_change)
         self.last_population += population_change
-        self.update_last_adjustment_time(time)
+        self._update_last_adjustment_time(time)
         return self.get_population(time)
 
-    def continuous_adjustment(self, population_slope, time):
+    def continuous_adjustment(self, time, population_slope):
         """ A continuous-time submodel adjusts the specie's state
 
         A continuous-time submodel, such as an ordinary differential equation (ODE) or a dynamic flux
@@ -1290,7 +1324,7 @@ class DynamicSpecie(object):
             raise SpeciesPopulationError(
                 "continuous_adjustment(): DynamicSpecie not modeled by a continuous submodel; "
                 "set modeled_continuously True")
-        self.validate_adjustment_time(time, 'continuous_adjustment')
+        self._validate_adjustment_time(time, 'continuous_adjustment')
         # self.continuous_time is None until the first continuous_adjustment()
         if self.continuous_time is not None:
             if self.last_population + self.population_slope * (time - self.continuous_time) < 0:
@@ -1302,7 +1336,7 @@ class DynamicSpecie(object):
             self.last_population += self.population_slope * (time - self.continuous_time)
         self.continuous_time = time
         self.population_slope = population_slope
-        self.update_last_adjustment_time(time)
+        self._update_last_adjustment_time(time)
         return self.get_population(time)
 
     def get_population(self, time, round=True):
@@ -1326,7 +1360,7 @@ class DynamicSpecie(object):
 
         Args:
             time (:obj:`float`): the current simulation time
-            round (:obj:`bool`, optional): if not `round` then do not round the populations to integers
+            round (:obj:`bool`, optional): if `round` then round the populations to integers
 
         Returns:
             int: an integer approximation of the specie's adjusted population
@@ -1337,11 +1371,12 @@ class DynamicSpecie(object):
             NegativePopulationError: if interpolation predicts a negative population
         """
         # todo: dont round population before calculating concentrations
-        self.validate_read_time(time, 'get_population')
+        self._validate_read_time(time, 'get_population')
         if not self.modeled_continuously:
-            self.update_last_read_time(time)
-            # todo: I think round isn't needed here
-            return self.random_state.round(self.last_population)
+            self._update_last_read_time(time)
+            # self.last_population does not need to be rounded as discrete submodels only change
+            # populations by integral amounts
+            return self.last_population
         else:
             interpolation=0
             if self.continuous_time is not None:
@@ -1351,8 +1386,8 @@ class DynamicSpecie(object):
                     raise NegativePopulationError('get_population', self.specie_name,
                         self.last_population, interpolation, time - self.continuous_time)
             float_copy_number = self.last_population + interpolation
-            self.update_last_read_time(time)
-            # if not round then do not round the return value to an integer
+            self._update_last_read_time(time)
+            # if round then round the return value to an integer, otherwise don't
             if round:
                 # this cannot return a negative number
                 return self.random_state.round(float_copy_number)
