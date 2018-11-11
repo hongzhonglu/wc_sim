@@ -1112,7 +1112,7 @@ class SpeciesPopSimObject(LocalSpeciesPopulation, ApplicationSimulationObject,
 
 
 class DynamicSpecie(object):
-    """ DynamicSpecie tracks the population of a single specie in a multi-algorithmic model
+    """ Track the population of a single specie in a multi-algorithmic model
 
     A specie is a shared object that can be read and written by multiple submodels in a
     multi-algorithmic model. We assume that a sequence of accesses of a specie instance will
@@ -1126,7 +1126,7 @@ class DynamicSpecie(object):
     determined by the algorithm. At these instants, continuous-time models typically
     estimate a specie's population and the population's rate of change. We assume this behavior.
 
-    A specie's state in a multi-algorithmic model may be modeled by multiple submodels which model
+    A specie's state in a multi-algorithmic model may be modeled by multiple submodels that model
     reactions in which the specie participates. These can be multiple discrete-time submodels and
     at most one continuous-time submodel. (If multiple continuous-time submodels were allowed to
     predict reactions that involve a specie, a mechanism would be needed to reconsile conflicting
@@ -1171,7 +1171,7 @@ class DynamicSpecie(object):
             reporting, logging, debugging, etc.
         random_state (:obj:`numpy.random.RandomState`): a shared PRNG
         last_population (:obj:`float`): population after the most recent adjustment
-        modeled_continuously (bool): whether one of the submodels modeling the species is a
+        modeled_continuously (:obj:`bool`): whether one of the submodels modeling the species is a
             continuous submodel; must be set at initialization
         population_slope (:obj:`float`): if a continuous submodel is modeling the specie, the rate of
             change to the population provided at initialization or by the most recent adjustment by a
@@ -1195,8 +1195,8 @@ class DynamicSpecie(object):
             specie_name (:obj:`str`): the specie's name; not logically needed, but helpful for error
                 reporting, logging, debugging, etc.
             random_state (:obj:`numpy.random.RandomState`): a shared PRNG
-            initial_population (int): non-negative number; initial population of the specie
-            modeled_continuously (bool, optional): whether a continuous submodel models this species;
+            initial_population (:obj:`int`): non-negative number; initial population of the specie
+            modeled_continuously (:obj:`bool`, optional): whether a continuous submodel models this species;
                 default=`False`
         """
         assert 0 <= initial_population, "DynamicSpecie '{}': population should be >= 0".format(specie_name)
@@ -1273,16 +1273,16 @@ class DynamicSpecie(object):
         method to adjust the specie's population.
 
         Args:
-            time (number): the simulation time at which the predicted change occurs; this time is
+            time (:obj:`float`): the simulation time at which the predicted change occurs; this time is
                 used by `get_population` to interpolate continuous-time predictions between integrations.
-            population_change (number): the modeled increase or decrease in the specie's population
+            population_change (:obj:`float`): the modeled increase or decrease in the specie's population
 
         Returns:
-            int: an integer approximation of the specie's adjusted population
+            :obj:`int`: an integer approximation of the specie's adjusted population
 
         Raises:
-            NegativePopulationError: if the predicted population at `time` is negative or
-            if decreasing the population by `population_change` would make the population negative
+            :obj:`NegativePopulationError`: if the predicted population at `time` is negative or
+                if decreasing the population by `population_change` would make the population negative
         """
         assert float(population_change).is_integer(), \
             "DynamicSpecie '{}': population_change must be an integer, but {} isn't".format(
@@ -1305,19 +1305,18 @@ class DynamicSpecie(object):
         population's short-term future rate of change.
 
         Args:
-            time (number): the simulation time at which the predicted change occurs; this time is
+            time (:obj:`float`): the simulation time at which the predicted change occurs; this time is
                 used by `get_population` to interpolate continuous-time predictions between
                 integrations.
-            population_slope (number): the predicted rate of change of the specie at the provided time
+            population_slope (:obj:`float`): the predicted rate of change of the specie at the provided time
 
         Returns:
-            int: the specie's adjusted population, rounded to an integer
+            :obj:`int`: the specie's adjusted population, rounded to an integer
 
         Raises:
-            :obj:`SpeciesPopulationError`: if an initial population slope was not provided
-            :obj:`SpeciesPopulationError`: if `time` is not greater than the time of the most recent
-                `continuous_adjustment` call on this `specie`
-            NegativePopulationError: if updating the population based on the previous `population_slope`
+            :obj:`SpeciesPopulationError`: if an initial population slope was not provided, or
+                if `time` is not greater than the time of the most recent `continuous_adjustment` call
+            :obj:`NegativePopulationError`: if updating the population based on the previous `population_slope`
                 makes the population go negative
         """
         if not self.modeled_continuously:
@@ -1339,7 +1338,7 @@ class DynamicSpecie(object):
         self._update_last_adjustment_time(time)
         return self.get_population(time)
 
-    def get_population(self, time, round=True):
+    def get_population(self, time, interpolate=None, round=True):
         """ Provide the specie's current population
 
         If one of the submodel(s) predicting the specie's population is a continuous-time model,
@@ -1361,16 +1360,18 @@ class DynamicSpecie(object):
         Args:
             time (:obj:`float`): the current simulation time
             round (:obj:`bool`, optional): if `round` then round the populations to integers
+            interpolate (:obj:`bool`, optional): if not `None` then control interpolation;
+                otherwise it's controlled by the 'interpolate' config variable
 
         Returns:
-            int: an integer approximation of the specie's adjusted population
+            :obj:`int`: if `round`, an integer approximation of the specie's population, otherwise
+                the floating population
 
         Raises:
             :obj:`SpeciesPopulationError`: if `time` is earlier than the time of a previous continuous
                 adjustment or discrete adjustment
-            NegativePopulationError: if interpolation predicts a negative population
+            :obj:`NegativePopulationError`: if interpolation predicts a negative population
         """
-        # todo: dont round population before calculating concentrations
         self._validate_read_time(time, 'get_population')
         if not self.modeled_continuously:
             self._update_last_read_time(time)
@@ -1378,13 +1379,15 @@ class DynamicSpecie(object):
             # populations by integral amounts
             return self.last_population
         else:
-            interpolation=0
+            interpolation = 0
             if self.continuous_time is not None:
-                if config_multialgorithm['interpolate']:
+                if interpolate is None:
+                    interpolate = config_multialgorithm['interpolate']
+                if interpolate:
                     interpolation = (time - self.continuous_time) * self.population_slope
-                if self.last_population + interpolation < 0:
-                    raise NegativePopulationError('get_population', self.specie_name,
-                        self.last_population, interpolation, time - self.continuous_time)
+                    if self.last_population + interpolation < 0:
+                        raise NegativePopulationError('get_population', self.specie_name,
+                            self.last_population, interpolation, time - self.continuous_time)
             float_copy_number = self.last_population + interpolation
             self._update_last_read_time(time)
             # if round then round the return value to an integer, otherwise don't
@@ -1398,8 +1401,7 @@ class DynamicSpecie(object):
             return "specie_name: {}; last_population: {}; continuous_time: {}; population_slope: {}".format(
                 self.specie_name, self.last_population, self.continuous_time, self.population_slope)
         else:
-            return "specie_name: {}; last_population: {}".format(
-                self.specie_name, self.last_population)
+            return "specie_name: {}; last_population: {}".format(self.specie_name, self.last_population)
 
     @staticmethod
     def heading():

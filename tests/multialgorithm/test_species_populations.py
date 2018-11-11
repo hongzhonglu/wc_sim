@@ -664,16 +664,26 @@ class TestDynamicSpecie(unittest.TestCase):
             "continuous_adjustment\(\): adjustment_time is earlier than latest prior adjustment: "):
             ds_hybrid.continuous_adjustment(time-1, 0)
 
-    def test_species_with_interpolation_false(self):
-        # change the interpolation
+    def test_species_with_and_wo_interpolation(self):
+        # test interpolate control
+        pop = 10
+        s0 = DynamicSpecie('specie', self.random_state, pop, modeled_continuously=True)
+        s0.continuous_adjustment(0, 1)
+        self.assertEqual(s0.get_population(time=1), pop + 1)
+        self.assertEqual(s0.get_population(time=1, interpolate=False), pop)
+        self.assertEqual(s0.get_population(time=1, interpolate=True), pop + 1)
+
+        # set the config interpolate variable to False
         from wc_sim.multialgorithm.species_populations import config_multialgorithm
         existing_interpolate = config_multialgorithm['interpolate']
         config_multialgorithm['interpolate'] = False
 
-        s1 = DynamicSpecie('specie', self.random_state, 10)
-        self.assertEqual(s1.get_population(time=0), 10)
-        self.assertEqual(s1.get_population(time=1), 10)
-        # change back because all imports may already have been cached
+        s1 = DynamicSpecie('specie', self.random_state, pop, modeled_continuously=True)
+        self.assertEqual(s1.get_population(time=1), pop)
+        self.assertEqual(s0.get_population(time=1, interpolate=False), pop)
+        self.assertEqual(s0.get_population(time=1, interpolate=True), pop + 1)
+
+        # change the config interpolate variable back because all imports may already have been cached
         config_multialgorithm['interpolate'] = existing_interpolate
 
     def test_NegativePopulationError(self):
