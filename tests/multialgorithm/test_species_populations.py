@@ -248,7 +248,7 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
 
     def test_init(self):
         self.assertEqual(self.local_species_pop_no_init_pop_slope._all_species(), set(self.species_ids))
-        an_LSP = LocalSpeciesPopulation('test', {}, {}, retain_history=False)
+        an_LSP = LocalSpeciesPopulation('test', {}, {}, record_history=False)
         an_LSP.init_cell_state_specie('s1', 2, model_continuously=False)
         self.assertEqual(an_LSP.read(0, {'s1'}), {'s1': 2})
 
@@ -328,49 +328,6 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             "adjust_continuously error\(s\) at time .*:\n"
             "continuous_adjustment: .* negative population predicted .*"):
             self.local_species_pop.adjust_continuously(time + 1, {id:0 for id in self.species_ids})
-
-    @unittest.skip("stop recording history in LocalSpeciesPopulation; checkpointing is a better approach")
-    def test_history(self):
-
-        an_LSP_wo_recording_history = LocalSpeciesPopulation('test',
-            self.init_populations, self.init_populations, retain_history=False)
-
-        with self.assertRaisesRegexp(SpeciesPopulationError, "history not recorded"):
-            an_LSP_wo_recording_history.report_history()
-
-        with self.assertRaisesRegexp(SpeciesPopulationError, "history not recorded"):
-            an_LSP_wo_recording_history.history_debug()
-
-        an_LSP_recording_history = LocalSpeciesPopulation('test',
-            self.init_populations, self.init_populations, retain_history=True)
-        self.assertTrue(an_LSP_recording_history._recording_history())
-        next_time = 1
-        first_specie = self.species_ids[0]
-        an_LSP_recording_history.read(next_time, {first_specie})
-        an_LSP_recording_history._record_history()
-        with self.assertRaisesRegexp(SpeciesPopulationError,
-            re.escape("time of previous _record_history() (1) not less than current time")):
-            an_LSP_recording_history._record_history()
-
-        history = an_LSP_recording_history.report_history()
-        self.assertEqual(history['time'], [next_time])
-        first_specie_history = [1.0]
-        self.assertEqual(history['population'][first_specie], first_specie_history)
-        self.assertIn(
-            '\t'.join(map(lambda x:str(x), [first_specie, 1] + first_specie_history)),
-            an_LSP_recording_history.history_debug())
-
-        # test numpy array history
-        with self.assertRaisesRegexp(SpeciesPopulationError,
-            "specie_type_ids and compartment_ids must be provided"):
-            an_LSP_recording_history.report_history(numpy_format=True)
-        specie_type_ids = self.species_type_ids
-        compartment_ids = self.compartment_ids
-        time_hist, species_counts_hist = an_LSP_recording_history.report_history(numpy_format=True,
-            specie_type_ids=specie_type_ids, compartment_ids=compartment_ids)
-        self.assertTrue((time_hist == np.array([next_time])).all())
-        for time_idx in [0]:
-            self.assertEqual(species_counts_hist[0, 0, time_idx], first_specie_history[time_idx])
 
     def test_mass(self):
         self.assertEqual(self.local_species_pop.compartmental_mass('no_such_compartment'), 0)

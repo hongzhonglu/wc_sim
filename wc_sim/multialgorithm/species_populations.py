@@ -509,7 +509,6 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
 
     All access operations that read or modify the population must provide a simulation time.
     For any given specie, all operations must occur in non-decreasing simulation time order.
-    Record history operations must also occur in time order.
 
     Simulation time arguments enable detection of temporal causality errors by shared accesses from
     different submodels in a sequential
@@ -528,26 +527,21 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             molecular weight of each specie
         last_access_time (:obj:`dict` of `float`): map: species_name -> last_time; the last time at
             which the specie was accessed.
-        history (:obj:`dict`) nested dict; an optional history of the species' state. The population
-            history is recorded at each continuous adjustment.
         random_state (:obj:`numpy.random.RandomState`): a PRNG used by all `Species`
     """
-    # TODO(Arthur): optionally, track the history of all interactions with a DynamicSpecies
+    # TODO(Arthur): optionally, track history in each DynamicSpecies
     # TODO(Arthur): report an error if a DynamicSpecie is updated by multiple continuous submodels
     # TODO(Arthur): molecular_weights should provide MW of each species type, as that's what the model has
     def __init__(self, name, initial_population, molecular_weights,
-        retain_history=False, initial_time=0, model_continuously=False):
+        record_history=False, initial_time=0, model_continuously=False):
         """ Initialize a `LocalSpeciesPopulation` object
-
-        Initialize a `LocalSpeciesPopulation` object. Establish its initial population, and initialize
-            the history if `retain_history` is `True`.
 
         Args:
             initial_population (:obj:`dict` of `float`): initial population for some species;
                 dict: specie_id -> initial_population
             molecular_weights (:obj:`dict` of `float`): map: specie_id -> molecular_weight,
                 provided for computing the mass of lists of species in a `LocalSpeciesPopulation`
-            retain_history (:obj:`bool`, optional): whether to retain species population history
+            record_history (:obj:`bool`, optional): whether to retain a history of all operations on species
             initial_time (:obj:`float`, optional): the initialization time; defaults to 0
 
         Raises:
@@ -558,9 +552,6 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         self._population = {}
         self.last_access_time = {}
         self.random_state = RandomStateManager.instance()
-
-        if retain_history:
-            self._initialize_history()
 
         for specie_id in initial_population:
             self.init_cell_state_specie(specie_id, initial_population[specie_id], model_continuously)
@@ -595,7 +586,6 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         self._population[specie_id] = DynamicSpecie(specie_id, self.random_state, population,
             modeled_continuously=model_continuously)
         self.last_access_time[specie_id] = self.time
-        self._add_to_history(specie_id)
 
     def _all_species(self):
         """ Return the IDs species known by this LocalSpeciesPopulation
@@ -732,9 +722,6 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         self._check_species(time, set(population_slopes.keys()))
         self.time = time
 
-        # record simulation state history
-        # TODO(Arthur): maybe also do it in adjust_discretely(); better, separately control its periodicity
-        # if self._recording_history(): self._record_history()
         errors = []
         for specie_id, population_slope in population_slopes.items():
             try:
@@ -822,54 +809,6 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         # log Sim_time Adjustment_type New_population New_population_slope
         debug_log.debug('\t'.join(values), local_call_depth=1, sim_time=self.time)
 
-    def _initialize_history(self):
-        """ Initialize the population history with current population """
-        self._history = {}
-        self._history['time'] = []  # a list of times at which population is recorded
-        # the value of self._history['population'][specie_id] is a list of
-        # the population of specie_id at the times history is recorded
-        self._history['population'] = {}
-
-    def _add_to_history(self, specie_id):
-        """ Add a specie to the history
-
-        Args:
-            specie_id (:obj:`str`): a unique specie identifier.
-        """
-        if self._recording_history():
-            population = self.read_one(self.time, specie_id)
-            self._history['population'][specie_id] = []
-
-    def _recording_history(self):
-        """ Is history being recorded?
-
-        Returns:
-            True if history is being recorded.
-        """
-        return hasattr(self, '_history')
-
-    def _record_history(self):
-        """ Record the current population in the history
-
-        Snapshot the current population of all species in the history. The current time
-        is obtained from `self.time`.
-
-        Raises:
-            :obj:`SpeciesPopulationError`: if the current time is less than the previous time at which the
-            history was recorded
-        """
-        print(self._history['time'], self.time)
-        if self._history['time']:
-            print(self._history['time'][-1])
-        if self._history['time'] and self.time < self._history['time'][-1]:
-            raise SpeciesPopulationError(
-                "current record time ({}) earlier than previous record time ({})".format(
-                self.time, self._history['time'][-1]))
-        self._history['time'].append(self.time)
-        for specie_id, population in self.read(self.time, self._all_species()).items():
-            self._history['population'][specie_id].append(population)
-
-    # TODO(Arthur): fix this docstring
     def report_history(self, numpy_format=False, specie_type_ids=None, compartment_ids=None):
         """ Provide the time and species count history
 
@@ -971,7 +910,7 @@ class MakeTestLSP(object):
     DEFAULT_ALL_POPS = 1E6
     DEFAULT_ALL_MOL_WEIGHTS = 50
     def __init__(self, name=None, initial_population=None, molecular_weights=None, initial_population_slopes=None,
-        retain_history=True, **kwargs):
+        record_history=True, **kwargs):
         """ Initialize a `MakeTestLSP` object
 
         All initialized arguments are applied to the local species population being created.
@@ -989,7 +928,7 @@ class MakeTestLSP(object):
             initial_population_slopes (:obj:`dict` of `float`, optional): map: specie_id -> initial_population_slope;
                 initial population slopes for all species whose populations are estimated by a continuous
                 submodel. Population slopes are ignored for species not specified in initial_population.
-            retain_history (:obj:`bool`, optional): whether to retain species population history
+            record_history (:obj:`bool`, optional): whether to record the history of operations
         """
         name = 'test_lsp' if name is None else name
         if initial_population is None:
@@ -1012,7 +951,7 @@ class MakeTestLSP(object):
         else:
             self.molecular_weights = molecular_weights
         self.local_species_pop = LocalSpeciesPopulation(name, self.initial_population, self.molecular_weights)
-        # todo: use initial_population_slopes=initial_population_slopes, retain_history=initial_population_slopes)
+        # todo: use initial_population_slopes=initial_population_slopes, record_history=initial_population_slopes)
 
 
 # TODO(Arthur): cover after MVP wc_sim done
@@ -1032,7 +971,7 @@ class SpeciesPopSimObject(LocalSpeciesPopulation, ApplicationSimulationObject,
         return 'object state to be provided'
 
     def __init__(self, name, initial_population, molecular_weights, initial_population_slopes=None,
-        retain_history=True):
+        record_history=True):
         """ Initialize a SpeciesPopSimObject object
 
         Initialize a SpeciesPopSimObject object. Initialize its base classes.
@@ -1287,7 +1226,7 @@ class DynamicSpecie(object):
     HistoryRecord.time.__doc__ = 'simulation time of the operation'
     HistoryRecord.operation.__doc__ = 'type of the operation'
     HistoryRecord.argument.__doc__ = "operation's argument: initialize: population; discrete_adjustment: "\
-        "population_change; continuous_adjustment: population_slope" 
+        "population_change; continuous_adjustment: population_slope"
 
     def _record_operation_in_hist(self, time, method, argument):
         """ Record a history entry
