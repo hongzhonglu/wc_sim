@@ -15,6 +15,8 @@ import sys
 from collections import defaultdict
 from scipy.constants import Avogadro
 import math
+from collections import namedtuple
+from enum import Enum
 
 import wc_lang
 from wc_sim.core.simulation_object import (SimulationObject, ApplicationSimulationObject,
@@ -530,14 +532,11 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             history is recorded at each continuous adjustment.
         random_state (:obj:`numpy.random.RandomState`): a PRNG used by all `Species`
     """
-    # TODO(Arthur): support tracking the population history of species added at any simulation time
     # TODO(Arthur): optionally, track the history of all interactions with a DynamicSpecies
     # TODO(Arthur): report an error if a DynamicSpecie is updated by multiple continuous submodels
-    # because each of them assumes that they model all changes to its population over their time step
     # TODO(Arthur): molecular_weights should provide MW of each species type, as that's what the model has
-    # TODO(Arthur): test non-zero initial_time
     def __init__(self, name, initial_population, molecular_weights,
-        retain_history=True, initial_time=0, model_continuously=False):
+        retain_history=False, initial_time=0, model_continuously=False):
         """ Initialize a `LocalSpeciesPopulation` object
 
         Initialize a `LocalSpeciesPopulation` object. Establish its initial population, and initialize
@@ -856,12 +855,16 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         is obtained from `self.time`.
 
         Raises:
-            :obj:`SpeciesPopulationError`: if the current time is not greater than the previous time at which the
-            history was recorded.
+            :obj:`SpeciesPopulationError`: if the current time is less than the previous time at which the
+            history was recorded
         """
+        print(self._history['time'], self.time)
+        if self._history['time']:
+            print(self._history['time'][-1])
         if self._history['time'] and self.time < self._history['time'][-1]:
-            raise SpeciesPopulationError("time of previous _record_history() ({}) not less than current time ({})".format(
-                self._history['time'][-1], self.time))
+            raise SpeciesPopulationError(
+                "current record time ({}) earlier than previous record time ({})".format(
+                self.time, self._history['time'][-1]))
         self._history['time'].append(self.time)
         for specie_id, population in self.read(self.time, self._all_species()).items():
             self._history['population'][specie_id].append(population)
@@ -1182,13 +1185,15 @@ class DynamicSpecie(object):
         last_adjustment_time (:obj:`float`): the time of the latest adjustment; used to prevent
             reads in the past
         last_read_time (:obj:`float`): the time of the latest read; used to prevent prior adjustments
+        _record_history (:obj:`bool`): whether to record history of operations
+        _history (:obj:`bool`): history of operations
     """
-    # TODO(Arthur): fix docstrings: type names, check output
     # use __slots__ to save space
     __slots__ = ['specie_name', 'random_state', 'last_population', 'modeled_continuously', 'population_slope',
-        'continuous_time', 'last_adjustment_time', 'last_read_time']
+        'continuous_time', 'last_adjustment_time', 'last_read_time', '_record_history', '_history']
 
-    def __init__(self, specie_name, random_state, initial_population, modeled_continuously=False):
+    def __init__(self, specie_name, random_state, initial_population, modeled_continuously=False,
+        record_history=False):
         """ Initialize a specie object, defaulting to a simulation time start time of 0
 
         Args:
@@ -1198,6 +1203,7 @@ class DynamicSpecie(object):
             initial_population (:obj:`int`): non-negative number; initial population of the specie
             modeled_continuously (:obj:`bool`, optional): whether a continuous submodel models this species;
                 default=`False`
+            record_history (:obj:`bool`, optional): whether to record a history of all operations; default=`False`
         """
         assert 0 <= initial_population, "DynamicSpecie '{}': population should be >= 0".format(specie_name)
         # if a population is not modeled continuously then it must be a non-negative integer
@@ -1214,6 +1220,10 @@ class DynamicSpecie(object):
             self.continuous_time = None
         self.last_adjustment_time = -float('inf')
         self.last_read_time = -float('inf')
+        self._record_history = record_history
+        if record_history:
+            self._history = []
+            self._record_operation_in_hist(0, 'initialize', initial_population)
 
     def _update_last_adjustment_time(self, adjustment_time):
         """ Advance the last adjustment time to `adjustment_time`
@@ -1266,6 +1276,31 @@ class DynamicSpecie(object):
                 "{}(): read_time is earlier than latest prior adjustment: "
                 "{:.2f} < {:.2f}".format(method, read_time, self.last_adjustment_time))
 
+    class Operation(Enum):
+        """ Types of operations on DynamicSpecies """
+        initialize = 1
+        discrete_adjustment = 2
+        continuous_adjustment = 3
+
+    HistoryRecord = namedtuple('HistoryRecord', 'time, operation, argument')
+    HistoryRecord.__doc__ += ': entry in a DynamicSpecie history'
+    HistoryRecord.time.__doc__ = 'simulation time of the operation'
+    HistoryRecord.operation.__doc__ = 'type of the operation'
+    HistoryRecord.argument.__doc__ = "operation's argument: initialize: population; discrete_adjustment: "\
+        "population_change; continuous_adjustment: population_slope" 
+
+    def _record_operation_in_hist(self, time, method, argument):
+        """ Record a history entry
+
+        Args:
+            time (:obj:`float`): simulation time of the operation
+            method (:obj:`str`): the operation type
+            argument (:obj:`float`): the operation's argument
+        """
+        if self._record_history:
+            operation = self.Operation[method]
+            self._history.append(self.HistoryRecord(time, operation, argument))
+
     def discrete_adjustment(self, time, population_change):
         """ Make a discrete adjustment of the specie's population
 
@@ -1294,6 +1329,7 @@ class DynamicSpecie(object):
                 self.last_population, population_change)
         self.last_population += population_change
         self._update_last_adjustment_time(time)
+        self._record_operation_in_hist(time, 'discrete_adjustment', population_change)
         return self.get_population(time)
 
     def continuous_adjustment(self, time, population_slope):
@@ -1336,6 +1372,7 @@ class DynamicSpecie(object):
         self.continuous_time = time
         self.population_slope = population_slope
         self._update_last_adjustment_time(time)
+        self._record_operation_in_hist(time, 'continuous_adjustment', population_slope)
         return self.get_population(time)
 
     def get_population(self, time, interpolate=None, round=True):
@@ -1395,6 +1432,20 @@ class DynamicSpecie(object):
                 # this cannot return a negative number
                 return self.random_state.round(float_copy_number)
             return float_copy_number
+
+    def get_history(self):
+        """ Obtain this `DynamicSpecie`'s history
+
+        Returns:
+            :obj:`list`: a list of `HistoryRecord`s, ordered by time
+
+        Raises:
+            :obj:`SpeciesPopulationError`: if the history wasn't recorded
+        """
+        if self._record_history:
+            return self._history
+        else:
+            raise SpeciesPopulationError('history not recorded')
 
     def __str__(self):
         if self.modeled_continuously:

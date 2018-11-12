@@ -223,7 +223,6 @@ class TestAccessSpeciesPopulations(unittest.TestCase):
         self.verify_simulation(expected_final_pops, sim_end)
 
 
-# TODO(Arthur): refactor this to make it easier to read; correct answers should be very obvious
 class TestLocalSpeciesPopulation(unittest.TestCase):
 
     def setUp(self):
@@ -245,7 +244,7 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         self.local_species_pop.adjust_continuously(0, {id:self.population_slope for id in species_ids})
 
         self.local_species_pop_no_init_pop_slope = LocalSpeciesPopulation(
-            'test', self.init_populations, self.molecular_weights,  model_continuously=False)
+            'test', self.init_populations, self.molecular_weights, model_continuously=False)
 
     def test_init(self):
         self.assertEqual(self.local_species_pop_no_init_pop_slope._all_species(), set(self.species_ids))
@@ -253,23 +252,19 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         an_LSP.init_cell_state_specie('s1', 2, model_continuously=False)
         self.assertEqual(an_LSP.read(0, {'s1'}), {'s1': 2})
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "specie_id 's1' already stored by this LocalSpeciesPopulation"):
             an_LSP.init_cell_state_specie('s1', 2, model_continuously=False)
-        self.assertIn("specie_id 's1' already stored by this LocalSpeciesPopulation",
-            str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError, "history not recorded"):
             an_LSP.report_history()
-        self.assertIn("history not recorded", str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError, "history not recorded"):
             an_LSP.history_debug()
-        self.assertIn("history not recorded", str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "Cannot init LocalSpeciesPopulation because some species are missing weights"):
             LocalSpeciesPopulation('test', {'s1': 2, 's2': 1}, {})
-        self.assertIn("Cannot init LocalSpeciesPopulation because some species are missing weights",
-            str(context.exception))
 
     def test_optional_species_argument(self):
         self.assertEqual(self.local_species_pop_no_init_pop_slope.read(0), self.init_populations)
@@ -284,23 +279,21 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         test_specie = 'specie_2[c2]'
         self.assertEqual(self.local_species_pop_no_init_pop_slope.read_one(1, test_specie),
             self.init_populations[test_specie])
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("request for population of unknown specie(s): 'unknown_specie_id'")):
             self.local_species_pop_no_init_pop_slope.read_one(2, 'unknown_specie_id')
-        self.assertIn("request for population of unknown specie(s): 'unknown_specie_id'", str(context.exception))
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError, "is an earlier access of specie\(s\)"):
             self.local_species_pop_no_init_pop_slope.read_one(0, test_specie)
-        self.assertIn("is an earlier access of specie(s)", str(context.exception))
 
     def reusable_assertions(self, the_local_species_pop, population_slope):
         # test both discrete and hybrid species
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError, "must be a set"):
             the_local_species_pop._check_species(0, 2)
-        self.assertIn("must be a set", str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "request for population of unknown specie\(s\):"):
             the_local_species_pop._check_species(0, {'x'})
-        self.assertIn("request for population of unknown specie(s):", str(context.exception))
 
         # populations have not changed
         self.assertEqual(the_local_species_pop.read(0, set(self.species_ids)), self.init_populations)
@@ -342,13 +335,11 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         an_LSP_wo_recording_history = LocalSpeciesPopulation('test',
             self.init_populations, self.init_populations, retain_history=False)
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError, "history not recorded"):
             an_LSP_wo_recording_history.report_history()
-        self.assertIn("history not recorded", str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError, "history not recorded"):
             an_LSP_wo_recording_history.history_debug()
-        self.assertIn("history not recorded", str(context.exception))
 
         an_LSP_recording_history = LocalSpeciesPopulation('test',
             self.init_populations, self.init_populations, retain_history=True)
@@ -357,10 +348,9 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         first_specie = self.species_ids[0]
         an_LSP_recording_history.read(next_time, {first_specie})
         an_LSP_recording_history._record_history()
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("time of previous _record_history() (1) not less than current time")):
             an_LSP_recording_history._record_history()
-        self.assertIn("time of previous _record_history() (1) not less than current time",
-            str(context.exception))
 
         history = an_LSP_recording_history.report_history()
         self.assertEqual(history['time'], [next_time])
@@ -371,9 +361,9 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             an_LSP_recording_history.history_debug())
 
         # test numpy array history
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "specie_type_ids and compartment_ids must be provided"):
             an_LSP_recording_history.report_history(numpy_format=True)
-        self.assertIn("specie_type_ids and compartment_ids must be provided", str(context.exception))
         specie_type_ids = self.species_type_ids
         compartment_ids = self.compartment_ids
         time_hist, species_counts_hist = an_LSP_recording_history.report_history(numpy_format=True,
@@ -400,10 +390,9 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             mass_of_specie_1_in_c1, places=30)
 
         unknown_species = 'specie_x[c1]'
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("molecular weight not available for '{}'".format(unknown_species))):
             self.local_species_pop.compartmental_mass('c1', species_ids=[unknown_species])
-        self.assertIn("molecular weight not available for '{}'".format(unknown_species),
-            str(context.exception))
 
     def test_invalid_weights(self):
         bad_molecular_weights = ['x', float('nan'), -2, 0]
@@ -453,6 +442,7 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         self.simulator.initialize()
         self.simulator.simulate(2)
     """
+
 
 class TestSpeciesPopulationCache(unittest.TestCase):
 
@@ -757,6 +747,26 @@ class TestDynamicSpecie(unittest.TestCase):
         s1.continuous_adjustment(1, 0.25)
         for i in range(samples):
             self.assertEqual(s1.get_population(3), 11.0)
+
+    def test_history(self):
+        pop = 10
+        ds = DynamicSpecie('s', self.random_state, pop, modeled_continuously=True, record_history=True)
+        slope = -2
+        ds.continuous_adjustment(1, slope)
+        discrete_adjustment = 3
+        ds.discrete_adjustment(2, discrete_adjustment)
+        HistoryRecord = DynamicSpecie.HistoryRecord
+        Operation = DynamicSpecie.Operation
+        expected_history = [
+            HistoryRecord(0, Operation['initialize'], pop),
+            HistoryRecord(1, Operation['continuous_adjustment'], slope),
+            HistoryRecord(2, Operation['discrete_adjustment'], discrete_adjustment)
+        ]
+        self.assertEqual(ds.get_history(), expected_history)
+
+        ds = DynamicSpecie('s', self.random_state, 0)
+        with self.assertRaisesRegexp(SpeciesPopulationError, 'history not recorded'):
+            ds.get_history()
 
 
 class MockSimulationTestingObject(MockSimulationObject):
