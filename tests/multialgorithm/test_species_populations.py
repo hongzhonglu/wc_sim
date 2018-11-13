@@ -75,34 +75,31 @@ class TestAccessSpeciesPopulations(unittest.TestCase):
         self.assertEqual(self.an_ASP.species_locations, {})
 
     def test_add_species_locations(self):
-        with self.assertRaises(SpeciesPopulationError) as cm:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("'no_such_store' not a known population store")):
             self.an_ASP.add_species_locations('no_such_store', species_ids[:2])
-        self.assertIn("'no_such_store' not a known population store", str(cm.exception))
 
         self.an_ASP.add_species_locations(store_i(1), species_ids[:2])
-        with self.assertRaises(SpeciesPopulationError) as cm:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("species ['specie_a', 'specie_b'] already have assigned locations.")):
             self.an_ASP.add_species_locations(store_i(1), species_ids[:2])
-        self.assertIn("species ['specie_a', 'specie_b'] already have assigned locations.",
-            str(cm.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as cm:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("species ['specie_c', 'specie_d'] are not in the location map")):
             self.an_ASP.del_species_locations([specie_l('d'), specie_l('c')])
-        self.assertIn("species ['specie_c', 'specie_d'] are not in the location map",
-            str(cm.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as cm:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("species ['specie_c', 'specie_d'] are not in the location map")):
             self.an_ASP.locate_species([specie_l('d'), specie_l('c')])
-        self.assertIn("species ['specie_c', 'specie_d'] are not in the location map",
-            str(cm.exception))
 
     def test_other_exceptions(self):
-        with self.assertRaises(SpeciesPopulationError) as cm:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "{} not a valid remote_pop_store name".format(LOCAL_POP_STORE)):
             AccessSpeciesPopulations(None, {'a':None, LOCAL_POP_STORE:None})
-        self.assertIn("{} not a valid remote_pop_store name".format(LOCAL_POP_STORE),
-            str(cm.exception))
-        with self.assertRaises(SpeciesPopulationError) as cm:
+
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "read_one: specie 'no_such_specie' not in the location map."):
             self.an_ASP.read_one(0, 'no_such_specie')
-        self.assertEqual(str(cm.exception), "read_one: specie 'no_such_specie' not in the location map.")
 
     @unittest.skip("skip until MultialgorithmSimulation().initialize() is ready")
     def test_population_changes(self):
@@ -113,18 +110,18 @@ class TestAccessSpeciesPopulations(unittest.TestCase):
         self.assertEqual(theASP.read_one(0, 'specie_1[c]'), init_val)
         self.assertEqual(theASP.read(0, set(['specie_1[c]'])), {'specie_1[c]': init_val})
 
-        with self.assertRaises(SpeciesPopulationError) as cm:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "read: species ['specie_2[c]'] not in cache."):
             theASP.read(0, set(['specie_2[c]']))
-        self.assertIn("read: species ['specie_2[c]'] not in cache.", str(cm.exception))
 
         adjustment=-10
         self.assertEqual(theASP.adjust_discretely(0, {'specie_1[c]':adjustment}),
             ['LOCAL_POP_STORE'])
         self.assertEqual(theASP.read_one(0, 'specie_1[c]'), init_val+adjustment)
 
-        with self.assertRaises(SpeciesPopulationError) as cm:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "read_one: specie 'specie_none' not in the location map."):
             theASP.read_one(0, 'specie_none')
-        self.assertIn("read_one: specie 'specie_none' not in the location map.", str(cm.exception))
 
         self.assertEqual(sorted(theASP.adjust_discretely(0,
             {'specie_1[c]': adjustment, 'specie_2[c]': adjustment})),
@@ -143,9 +140,9 @@ class TestAccessSpeciesPopulations(unittest.TestCase):
         self.assertEqual(theASP.read_one(time+delay, 'specie_1[c]'),
             init_val + 4*adjustment + delay*flux)
 
-        with self.assertRaises(SpeciesPopulationError) as cm:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "prefetch: 0 provided, but delay must be non-negative"):
             theASP.prefetch(0, ['specie_1[c]', 'specie_2[c]'])
-        self.assertIn("prefetch: 0 provided, but delay must be non-negative", str(cm.exception))
 
         self.assertEqual(theASP.prefetch(1, ['specie_1[c]', 'specie_2[c]']), ['shared_store_1'])
 
@@ -228,7 +225,7 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
     def setUp(self):
         RandomStateManager.initialize(seed=123)
 
-        species_nums = range(1, 5)
+        self.species_nums = species_nums = range(1, 5)
         self.species_type_ids = species_type_ids = list(map(lambda x: "specie_{}".format(x), species_nums))
         self.compartment_ids = compartment_ids = ['c1', 'c2']
         self.species_ids = species_ids = []
@@ -248,7 +245,7 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
 
     def test_init(self):
         self.assertEqual(self.local_species_pop_no_init_pop_slope._all_species(), set(self.species_ids))
-        an_LSP = LocalSpeciesPopulation('test', {}, {}, record_history=False)
+        an_LSP = LocalSpeciesPopulation('test', {}, {}, record_operations=False)
         an_LSP.init_cell_state_specie('s1', 2, model_continuously=False)
         self.assertEqual(an_LSP.read(0, {'s1'}), {'s1': 2})
 
@@ -256,11 +253,8 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
             "specie_id 's1' already stored by this LocalSpeciesPopulation"):
             an_LSP.init_cell_state_specie('s1', 2, model_continuously=False)
 
-        with self.assertRaisesRegexp(SpeciesPopulationError, "history not recorded"):
+        with self.assertRaisesRegexp(SpeciesPopulationError, "history was not recorded"):
             an_LSP.report_history()
-
-        with self.assertRaisesRegexp(SpeciesPopulationError, "history not recorded"):
-            an_LSP.history_debug()
 
         with self.assertRaisesRegexp(SpeciesPopulationError,
             "Cannot init LocalSpeciesPopulation because some species are missing weights"):
@@ -387,6 +381,33 @@ class TestLocalSpeciesPopulation(unittest.TestCase):
         self.assertEqual(make_test_lsp_4.initial_population, make_test_lsp.initial_population)
         self.assertEqual(make_test_lsp_4.molecular_weights, make_test_lsp.molecular_weights)
 
+    def test_history(self):
+        species_ids = self.species_ids[:2]
+        species_nums = self.species_nums[:2]
+        init_populations = dict(zip(species_ids, species_nums))
+        molecular_weights = dict(zip(species_ids, species_nums))
+
+        local_species_pop = LocalSpeciesPopulation('test', init_populations,
+            molecular_weights, model_continuously=True, record_operations=True)
+        slope = 0.5
+        local_species_pop.adjust_continuously(0, {species_ids[0]: slope})
+        adjustment = 2
+        local_species_pop.adjust_discretely(0, {species_ids[1]: adjustment})
+
+        HistoryRecord = DynamicSpecie.HistoryRecord
+        Operation = DynamicSpecie.Operation
+        expected_history = {
+            species_ids[0]: [HistoryRecord(0, Operation['initialize'], argument=1),
+                  HistoryRecord(0, Operation['continuous_adjustment'], argument=slope)],
+            species_ids[1]: [HistoryRecord(0, Operation['initialize'], argument=2),
+                  HistoryRecord(0, Operation['discrete_adjustment'], argument=adjustment)]
+        }
+        self.assertEqual(local_species_pop.report_history(), expected_history)
+        del expected_history[species_ids[1]]
+        self.assertEqual(local_species_pop.report_history(specie_ids=species_ids[:1]), expected_history)
+        with self.assertRaisesRegexp(SpeciesPopulationError, "history was not recorded"):
+            self.local_species_pop.report_history()
+
     """
     todo: test the distributed property MASS
     def test_mass(self):
@@ -425,36 +446,31 @@ class TestSpeciesPopulationCache(unittest.TestCase):
             population_dict)
 
     def test_species_population_cache_exceptions(self):
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("some species are stored in the AccessSpeciesPopulations's local store: ['specie_0'].")):
             self.species_population_cache.cache_population(1, {"specie_0": 3})
-        self.assertIn("some species are stored in the AccessSpeciesPopulations's local store: "
-            "['specie_0'].", str(context.exception))
 
         self.species_population_cache.cache_population(0, {"specie_1[comp_id]": 3})
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("cache_population: caching an earlier population: specie_id: specie_1[comp_id]; "
+                "current time: -1 <= previous time 0.")):
             self.species_population_cache.cache_population(-1, {"specie_1[comp_id]": 3})
-        self.assertIn("cache_population: caching an earlier population: specie_id: specie_1[comp_id]; "
-            "current time: -1 <= previous time 0.", str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            "SpeciesPopulationCache.read_one: specie 'specie_none' not in cache."):
             self.species_population_cache.read_one(1, 'specie_none')
-        self.assertIn("SpeciesPopulationCache.read_one: specie 'specie_none' not in cache.",
-            str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("cache age of 1 too big for read at time 1 of specie 'specie_1[comp_id]'")):
             self.species_population_cache.read_one(1, 'specie_1[comp_id]')
-        self.assertIn("cache age of 1 too big for read at time 1 of specie 'specie_1[comp_id]'",
-            str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape("SpeciesPopulationCache.read: species ['specie_none'] not in cache.")):
             self.species_population_cache.read(0, ['specie_none'])
-        self.assertIn("SpeciesPopulationCache.read: species ['specie_none'] not in cache.",
-            str(context.exception))
 
-        with self.assertRaises(SpeciesPopulationError) as context:
+        with self.assertRaisesRegexp(SpeciesPopulationError,
+            re.escape(".read: species ['specie_1[comp_id]'] not reading recently cached value(s)")):
             self.species_population_cache.read(1, ['specie_1[comp_id]'])
-        self.assertIn(".read: species ['specie_1[comp_id]'] not reading recently cached value(s)",
-            str(context.exception))
 
 
 class TestDynamicSpecie(unittest.TestCase):
@@ -845,6 +861,7 @@ class TestSpeciesPopSimObjectWithAnotherSimObject(unittest.TestCase):
 class InitMsg1(SimulationMessage): pass
 
 
+@unittest.skip("skip until MVP wc_sim done")
 class TestSpeciesPopSimObject(unittest.TestCase):
 
     def setUp(self):
@@ -858,17 +875,17 @@ class TestSpeciesPopSimObject(unittest.TestCase):
 
     def test_init(self):
         for s in self.initial_population.keys():
-            self.assertEqual(self.test_species_pop_sim_obj.read_one(0,s), self.initial_population[s])
+            self.assertEqual(self.test_species_pop_sim_obj.read_one(0, s), self.initial_population[s])
 
     def test_invalid_event_types(self):
 
-        with self.assertRaises(SimulatorError) as context:
+        with self.assertRaisesRegexp(SimulatorError,
+            re.escape("'wc_sim.multialgorithm.species_populations.SpeciesPopSimObject' "
+                "simulation objects not registered to send")):
             self.test_species_pop_sim_obj.send_event(1.0, self.test_species_pop_sim_obj, InitMsg1())
-        self.assertIn("'wc_sim.multialgorithm.species_populations.SpeciesPopSimObject' simulation "
-            "objects not registered to send", str(context.exception))
 
-        with self.assertRaises(SimulatorError) as context:
+        with self.assertRaisesRegexp(SimulatorError,
+            re.escape("'wc_sim.multialgorithm.species_populations.SpeciesPopSimObject' "
+                "simulation objects not registered to receive")):
             self.test_species_pop_sim_obj.send_event(1.0, self.test_species_pop_sim_obj,
                 message_types.GivePopulation(7))
-        self.assertIn("'wc_sim.multialgorithm.species_populations.SpeciesPopSimObject' simulation "
-            "objects not registered to receive", str(context.exception))

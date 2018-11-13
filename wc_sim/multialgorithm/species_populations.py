@@ -519,7 +519,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
     `SpeciesPopSimObject`.
 
     Attributes:
-        name (:obj:`str`): the name of this object.
+        name (:obj:`str`): the name of this object
         time (:obj:`float`): the time of the most recent access to this `LocalSpeciesPopulation`
         _population (:obj:`dict` of :obj:`DynamicSpecie`): map: specie_id -> DynamicSpecie(); the species whose
             counts are stored, represented by DynamicSpecie objects.
@@ -528,21 +528,24 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         last_access_time (:obj:`dict` of `float`): map: species_name -> last_time; the last time at
             which the specie was accessed.
         random_state (:obj:`numpy.random.RandomState`): a PRNG used by all `Species`
+        _record_operations (:obj:`bool`): whether a history is retained for all operations on all species
     """
-    # TODO(Arthur): optionally, track history in each DynamicSpecies
     # TODO(Arthur): report an error if a DynamicSpecie is updated by multiple continuous submodels
-    # TODO(Arthur): molecular_weights should provide MW of each species type, as that's what the model has
+    # TODO(Arthur): molecular_weights should accept MW of each species type, like the model does
+    # TODO(Arthur): specify record_operations and model_continuously independently for each specie
     def __init__(self, name, initial_population, molecular_weights,
-        record_history=False, initial_time=0, model_continuously=False):
+        initial_time=0, model_continuously=False, record_operations=False):
         """ Initialize a `LocalSpeciesPopulation` object
 
         Args:
+            name (:obj:`str`): the name of this object
             initial_population (:obj:`dict` of `float`): initial population for some species;
                 dict: specie_id -> initial_population
             molecular_weights (:obj:`dict` of `float`): map: specie_id -> molecular_weight,
                 provided for computing the mass of lists of species in a `LocalSpeciesPopulation`
-            record_history (:obj:`bool`, optional): whether to retain a history of all operations on species
             initial_time (:obj:`float`, optional): the initialization time; defaults to 0
+            model_continuously (:obj:`bool`, optional): whether to each species is modeled continuously
+            record_operations (:obj:`bool`, optional): whether to retain a history of all operations on all species
 
         Raises:
             :obj:`SpeciesPopulationError`: if the population cannot be initialized
@@ -553,22 +556,24 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         self.last_access_time = {}
         self.random_state = RandomStateManager.instance()
 
-        for specie_id in initial_population:
-            self.init_cell_state_specie(specie_id, initial_population[specie_id], model_continuously)
-
         unknown_weights = set(initial_population.keys()) - set(molecular_weights.keys())
         if unknown_weights:
             # raise exception if any species are missing weights
             raise SpeciesPopulationError("Cannot init LocalSpeciesPopulation because some species "
                 "are missing weights: {}".format(
                 ', '.join(map(lambda x: "'{}'".format(str(x)), unknown_weights))))
+
+        for specie_id in initial_population:
+            self.init_cell_state_specie(specie_id, initial_population[specie_id], model_continuously,
+                record_operations)
         self._molecular_weights = molecular_weights
+        self._record_operations = record_operations
 
         # log initialization data
         debug_log.debug("initial_population: {}".format(DictUtil.to_string_sorted_by_key(
             initial_population)), sim_time=self.time)
 
-    def init_cell_state_specie(self, specie_id, population, model_continuously):
+    def init_cell_state_specie(self, specie_id, population, model_continuously, record_operations=False):
         """ Initialize a specie with the given population and, optionally, initial population slope
 
         Add a specie to the cell state. The specie's population is set at the current time.
@@ -576,6 +581,9 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         Args:
             specie_id (:obj:`str`): the specie's globally unique identifier
             population (:obj:`float`): initial population of the specie
+            model_continuously (:obj:`bool`): whether the species is modeled continuously
+            record_operations (:obj:`bool`, optional): whether to retain a history of all operations
+                on the specie; default = `False`
 
         Raises:
             :obj:`SpeciesPopulationError`: if the specie is already stored by this LocalSpeciesPopulation
@@ -584,7 +592,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             raise SpeciesPopulationError("specie_id '{}' already stored by this "
                 "LocalSpeciesPopulation".format(specie_id))
         self._population[specie_id] = DynamicSpecie(specie_id, self.random_state, population,
-            modeled_continuously=model_continuously)
+            modeled_continuously=model_continuously, record_history=record_operations)
         self.last_access_time[specie_id] = self.time
 
     def _all_species(self):
@@ -643,7 +651,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             specie_id (:obj:`str`): identifier of the specie to access.
 
         Returns:
-            float: the predicted population of `specie_id` at simulation time `time`.
+            :obj:`float`: the predicted population of `specie_id` at simulation time `time`.
 
         Raises:
             :obj:`SpeciesPopulationError`: if the population of an unknown specie was requested
@@ -663,7 +671,7 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
             round (:obj:`bool`, optional): if `round` then round the populations to integers
 
         Returns:
-            species counts: dict: species_id -> copy_number; the predicted copy number of each
+            :obj:`dict`: species counts: species_id -> copy_number; the predicted copy number of each
             requested species at `time`
 
         Raises:
@@ -809,74 +817,25 @@ class LocalSpeciesPopulation(AccessSpeciesPopulationInterface):
         # log Sim_time Adjustment_type New_population New_population_slope
         debug_log.debug('\t'.join(values), local_call_depth=1, sim_time=self.time)
 
-    def report_history(self, numpy_format=False, specie_type_ids=None, compartment_ids=None):
-        """ Provide the time and species count history
+    def report_history(self, specie_ids=None):
+        """ Provide the history of operations on species in this LocalSpeciesPopulation
 
         Args:
-            numpy_format (:obj:`bool`, optional): if set, return history in a 3 dimensional numpy array
-            specie_type_ids (:obj:`list` of `str`, optional): the ids of specie_types in the
-                `Model` being simulated
-            compartment_ids (:obj:`list` of `str`, optional): the ids of the compartments in the
-                `Model` being simulated
+            specie_ids (:obj:`iterator` of `str`, optional): the ids of species to provide;
+                if `None`provide the history of operations on all species
 
         Returns:
-            :obj:`dict`: The time and species count history. By default, return a `dict`, with
-            `rv['time']` = list of time samples
-            `rv['population'][specie_id]` = list of counts for specie_id at the time samples
-            If `numpy_format` set, return a tuple containing a pair of numpy arrays that contain
-            the time and population histories, respectively.
+            :obj:`dict` of `list`: a map from species_id to history for each specie
 
         Raises:
             :obj:`SpeciesPopulationError`: if the history was not recorded
-            :obj:`SpeciesPopulationError`: if `numpy_format` set but `species` or `compartments` are
-                not provided
         """
-        if not self._recording_history():
-            raise SpeciesPopulationError("history not recorded")
-        if numpy_format:
-            if specie_type_ids is None or compartment_ids is None:
-                raise SpeciesPopulationError(
-                    "specie_type_ids and compartment_ids must be provided if numpy_format is set")
-            time_hist = numpy.asarray(self._history['time'])
-            species_counts_hist = numpy.zeros((len(specie_type_ids), len(compartment_ids),
-                len(self._history['time'])))
-            for specie_type_index,specie_type_id in list(enumerate(specie_type_ids)):
-                for comp_index,compartment_id in list(enumerate(compartment_ids)):
-                    for time_index in range(len(self._history['time'])):
-                        species_id = wc_lang.core.Species.gen_id(specie_type_id, compartment_id)
-                        if species_id in self._history['population']:
-                            species_counts_hist[specie_type_index, comp_index, time_index] = \
-                                self._history['population'][species_id][time_index]
-
-            return (time_hist, species_counts_hist)
-        else:
-            return self._history
-
-    def history_debug(self):
-        """ Provide some of the history in a string
-
-        Provide a string containing the start and end time of the history and
-        a table with the first and last population value for each specie.
-
-        Returns:
-            :obj:`str`: the start and end time of he history and a
-                tab-separated matrix of rows with species id, first, last population values
-
-        Raises:
-            :obj:`SpeciesPopulationError`: if the history was not recorded.
-        """
-        if self._recording_history():
-            lines = []
-            lines.append("#times\tfirst\tlast")
-            lines.append("{}\t{}\t{}".format(len(self._history['time']), self._history['time'][0],
-                self._history['time'][-1]))
-            lines.append("DynamicSpecie\t#values\tfirst\tlast")
-            for s in self._history['population'].keys():
-                lines.append("{}\t{}\t{:.1f}\t{:.1f}".format(s, len(self._history['population'][s]),
-                    self._history['population'][s][0], self._history['population'][s][-1]))
-            return '\n'.join(lines)
-        else:
-            raise SpeciesPopulationError("history not recorded")
+        if not self._record_operations:
+            raise SpeciesPopulationError("history was not recorded")
+        if specie_ids is None:
+            specie_ids = self._population.keys()
+        history = {id: self._population[id].get_history() for id in specie_ids}
+        return history
 
     def __str__(self):
         """ Provide readable `LocalSpeciesPopulation` state
@@ -910,7 +869,7 @@ class MakeTestLSP(object):
     DEFAULT_ALL_POPS = 1E6
     DEFAULT_ALL_MOL_WEIGHTS = 50
     def __init__(self, name=None, initial_population=None, molecular_weights=None, initial_population_slopes=None,
-        record_history=True, **kwargs):
+        record_operations=False, **kwargs):
         """ Initialize a `MakeTestLSP` object
 
         All initialized arguments are applied to the local species population being created.
@@ -928,7 +887,7 @@ class MakeTestLSP(object):
             initial_population_slopes (:obj:`dict` of `float`, optional): map: specie_id -> initial_population_slope;
                 initial population slopes for all species whose populations are estimated by a continuous
                 submodel. Population slopes are ignored for species not specified in initial_population.
-            record_history (:obj:`bool`, optional): whether to record the history of operations
+            record_operations (:obj:`bool`, optional): whether to record the history of operations
         """
         name = 'test_lsp' if name is None else name
         if initial_population is None:
@@ -951,7 +910,7 @@ class MakeTestLSP(object):
         else:
             self.molecular_weights = molecular_weights
         self.local_species_pop = LocalSpeciesPopulation(name, self.initial_population, self.molecular_weights)
-        # todo: use initial_population_slopes=initial_population_slopes, record_history=initial_population_slopes)
+        # todo: use initial_population_slopes and record_operations
 
 
 # TODO(Arthur): cover after MVP wc_sim done
@@ -970,8 +929,7 @@ class SpeciesPopSimObject(LocalSpeciesPopulation, ApplicationSimulationObject,
     def get_state(self):
         return 'object state to be provided'
 
-    def __init__(self, name, initial_population, molecular_weights, initial_population_slopes=None,
-        record_history=True):
+    def __init__(self, name, initial_population, molecular_weights, initial_population_slopes=None):
         """ Initialize a SpeciesPopSimObject object
 
         Initialize a SpeciesPopSimObject object. Initialize its base classes.

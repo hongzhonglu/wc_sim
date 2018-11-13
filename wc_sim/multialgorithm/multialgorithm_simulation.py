@@ -12,6 +12,7 @@ from scipy.constants import Avogadro
 from collections import defaultdict
 from math import ceil, floor, exp, log, log10, isnan
 import tokenize, token
+import warnings
 
 from obj_model import utils
 from wc_utils.util.list import difference, det_dedupe
@@ -25,7 +26,8 @@ from wc_sim.multialgorithm.species_populations import LocalSpeciesPopulation, Ac
 from wc_sim.multialgorithm.multialgorithm_errors import MultialgorithmError
 from wc_sim.multialgorithm.submodels.dynamic_submodel import DynamicSubmodel
 from wc_sim.multialgorithm.submodels.ssa import SSASubmodel
-from wc_sim.multialgorithm.submodels.fba import FbaSubmodel
+# from wc_sim.multialgorithm.submodels.fba import FbaSubmodel
+from wc_sim.multialgorithm.submodels.odes import OdeSubmodel
 from wc_sim.multialgorithm.species_populations import LOCAL_POP_STORE, SpeciesPopSimObject
 from wc_sim.multialgorithm.multialgorithm_checkpointing import MultialgorithmicCheckpointingSimObj
 from wc_sim.core.sim_metadata import SimulationMetadata
@@ -75,13 +77,18 @@ Algs:
         #. Create submodels that contain private species and access shared species
         #. Have SimulationObjects send their initial messages
 """
-
-
 # TODO (Arthur): put in config file
 DEFAULT_VALUES = dict(
     shared_specie_store='SHARED_SPECIE_STORE',
     checkpointing_sim_obj = 'CHECKPOINTING_SIM_OBJ'
 )
+
+
+class WcSimMultiAlgorithmWarning(UserWarning):
+    """ `wc_sim` multi-algorithm warning """
+    pass
+
+
 class MultialgorithmSimulation(object):
     """ Initialize a multialgorithm simulation from a language model and run-time parameters
 
@@ -121,7 +128,7 @@ class MultialgorithmSimulation(object):
         self.args = args
         self.init_populations = {}
         self.simulation = SimulationEngine()
-        self.simulation_submodels = {}
+        self.simulation_submodels = []
         self.checkpointing_sim_obj = None
         self.species_pop_objs = {}
         self.shared_specie_store_name = shared_specie_store_name
@@ -197,6 +204,7 @@ class MultialgorithmSimulation(object):
         molecular_weights = self.molecular_weights_for_species(self.private_species[lang_submodel.id])
 
         # DFBA submodels need initial fluxes
+        # todo: double-check this
         if lang_submodel.algorithm == SubmodelAlgorithm.dfba:
             initial_fluxes = {specie_id:0 for specie_id in self.private_species[lang_submodel.id]}
         else:
@@ -272,14 +280,14 @@ class MultialgorithmSimulation(object):
         return dynamic_compartments
 
     @staticmethod
-    def make_local_species_pop(model, retain_history=True):
+    def make_local_species_pop(model, record_operations=True):
         """ Create a `LocalSpeciesPopulation` that contains all the species in a model
 
         Instantiate a `LocalSpeciesPopulation` as a single, centralized store of a model's population.
 
         Args:
             model (:obj:`Model`): a `wc_lang` model
-            retain_history (:obj:`bool`, optional): whether the `LocalSpeciesPopulation` should
+            record_operations (:obj:`bool`, optional): whether the `LocalSpeciesPopulation` should
                 retain species population history
 
         Returns:
@@ -293,22 +301,20 @@ class MultialgorithmSimulation(object):
             # TODO(Arthur): make get_one more robust, or do linear search
             molecular_weights[specie.id()] = model.species_types.get_one(id=specie_type_id).molecular_weight
 
-        # Species used by continuous time submodels (like DFBA and ODE) need initial fluxes
+        # Species used by continuous time submodels (like DFBA and ODE) need model_continuously=True
         # which indicate that the species is modeled by a continuous time submodel.
-        # TODO(Arthur): support non-zero initial fluxes
-        initial_fluxes = {}
         continuous_time_submodels = set([SubmodelAlgorithm.dfba, SubmodelAlgorithm.ode])
         for submodel in model.get_submodels():
             if submodel.algorithm in continuous_time_submodels:
-                for specie in submodel.get_species():
-                    initial_fluxes[specie.id()] = 0.0
+                pass
+                # todo: provide granular control on model_continuously by species here
 
         return LocalSpeciesPopulation(
             'LSP_' + model.id,
             initial_population,
             molecular_weights,
-            initial_fluxes=initial_fluxes,
-            retain_history=retain_history)
+            model_continuously=True,
+            record_operations=record_operations)
 
     def create_multialgorithm_checkpointing(self, checkpoints_dir, checkpoint_period):
         """ Create a multialgorithm checkpointing object for this simulation
@@ -341,6 +347,12 @@ class MultialgorithmSimulation(object):
         # make the simulation's submodels
         simulation_submodels = []
         for lang_submodel in self.model.get_submodels():
+            # todo: give each submodel all model and particular submodel params
+            # don't create a submodel with no reactions
+            if not lang_submodel.reactions:
+                warnings.warn("not creating submodel '{}': no reactions provided".format(lang_submodel.id),
+                    WcSimMultiAlgorithmWarning)
+                continue
 
             if lang_submodel.algorithm == SubmodelAlgorithm.ssa:
                 simulation_submodel = SSASubmodel(
@@ -355,6 +367,7 @@ class MultialgorithmSimulation(object):
 
             elif lang_submodel.algorithm == SubmodelAlgorithm.dfba:
                 # TODO(Arthur): make DFBA submodels work
+                print('warning: DFBA submodels not implemented')
                 continue
 
                 simulation_submodel = FbaSubmodel(
@@ -369,8 +382,17 @@ class MultialgorithmSimulation(object):
                 )
 
             elif lang_submodel.algorithm == SubmodelAlgorithm.ode:
-                # TODO(Arthur): incorporate an ODE lang_submodel; perhaps the one Eric & Catherine wrote
-                raise MultialgorithmError("Need ODE implementation")
+                simulation_submodel = OdeSubmodel(
+                    lang_submodel.id,
+                    self.dynamic_model,
+                    list(lang_submodel.reactions),
+                    lang_submodel.get_species(),
+                    lang_submodel.parameters,
+                    self.get_dynamic_compartments(lang_submodel),
+                    self.local_species_population,
+                    self.args['time_step']
+                )
+
             else:
                 raise MultialgorithmError("Unsupported lang_submodel algorithm '{}'".format(lang_submodel.algorithm))
 
